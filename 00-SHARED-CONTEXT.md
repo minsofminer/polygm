@@ -265,3 +265,24 @@ Extracted from gmgn's own documentation. These are the product patterns that mak
 `/home/user/polygm/public/index.html` — mobile-first Mini App UI, 4 tabs, live tape with whale flags, order-book depth sheet, paper-trade flow.
 
 Use it as the starting point for P4–P6, not as a throwaway.
+
+---
+
+## 12. Corrections from the P01 build session (added 2026-09-16 16:31 UTC, nothing above deleted)
+
+Verified live from the build workspace with `tools/datasource-probe.py` (26/26 endpoint assertions).
+These are fact corrections to §2 and §6, so later sessions do not re-inherit them.
+
+| § | Stated | Correct |
+|---|---|---|
+| §2 | Gamma `/markets` 300, `/events` 500 per 10 min (implies large pages) | **Pages are capped at 100 rows** regardless of `limit=`; default is 20. `offset=` works. Any top-N volume figure needs pagination (300 rows → $59.2M, which reproduces §5's $59.1M). |
+| §11 | "Fill rate on `/trades` feed ~20.8 trades/sec" | `data-api /trades` is **served from Cloudflare cache** (`cf-cache-status: HIT`; byte-identical 8 s apart, one pull 300 s stale). Measured tape rate **14.7–33.3 fills/sec**. It is a snapshot for backfill, **not a feed** — real-time tape requires the WebSocket. |
+| §5 | Wedge "5-minute crypto Up/Down — highest frequency, highest fee rate" | Up/down markets are **≤0.14% of top-100 market volume** and **absent entirely** from volume-ordered `/events` (0 of 300; event-level `volume24hr` is null/0 there). Frequency ≠ volume; do not size a product on it. |
+| §2 | Leaderboard `lb-api /volume` | Also `GET /profit` (both for `window=1d\|7d\|30d\|all`). **`/pnl` does not exist (404)** and **`/rank` is unusable** (400 naming a missing `rank` param even when it is supplied). PnL/rank must be computed by us and labelled as our estimate. |
+| §2 | Data API "trades, positions, holders, activity" | Exact required params: `/positions?user=`, `/activity?user=`, `/value?user=`, `/traded?user=`, `/holders?market=` (400 with the param name in the error otherwise). **There is no `/profile` endpoint (404)** — trade rows already carry `name, pseudonym, bio, profileImage, title, eventSlug, icon, transactionHash`. |
+| §3 | Fee category table lives only in this doc | Gamma exposes **`feeType` per market** (`crypto_fees_v2`, `politics_fees`, `sports_fees_v2`, `economics_fees`, `culture_fees`, `finance_prices_fees`), so fee category is readable, not guessable. `feeRate` itself was `null` on sampled markets. |
+| §4 | (PnL guidance) | `REDEEM` rows in `/activity` have **`price == 0` on 366/366** and carry payout in **`usdcSize`** (nonzero on 280/366, exactly `1:1` with `size` ⇒ $1/share). Computing realised PnL from `price × size` prices every redemption at zero. |
+| §6 | "Polywhaler (30k…)" etc. | Competitor onboarding flows are **not** machine-inspectable from a sandbox: 4/6 sites return empty bodies to curl, `polymarketanalytics.com` returns **429 Vercel Security Checkpoint**. Step counts must be measured by a human with a wallet. |
+
+Open upstream gap: `⚠️` on §7 brand tokens was not re-checked this session (CSS-derived values are a
+design input, not an API fact).
