@@ -286,3 +286,20 @@ These are fact corrections to §2 and §6, so later sessions do not re-inherit t
 
 Open upstream gap: `⚠️` on §7 brand tokens was not re-checked this session (CSS-derived values are a
 design input, not an API fact).
+
+## 13. Corrections from the P02–P03 build session (added 2026-09-17, nothing above deleted)
+
+These are measurements, not preferences. Where one contradicts a number earlier in this file, the row says
+which artifact now owns the corrected value.
+
+| Ref | Claim as written above | Measured |
+|---|---|---|
+| §12 | `feeType` exposes six values including `finance_prices_fees` | Five are in the retained deep probe (2,500 market rows): `crypto_fees_v2`, `politics_fees`, `sports_fees_v2`, `economics_fees`, `culture_fees`. The sixth came from an earlier pull whose JSON was overwritten, so it is **unretained, not refuted** — and it cannot be re-tested by tag because **Gamma ignores `tag_slug`** (see next row). Treat the taxonomy as *open*: read `feeType` per market, never hard-code an allow-list. Owned by `polygm-platform/docs/P01-product-spec.md` + `tools/p01-gate-check.py` C9. |
+| §12 | (method) | **`gamma-api /markets?tag_slug=` is ignored.** `tag_slug=politics`, `tag_slug=sports` and `tag_slug=zzzznotatag` all return identical 40-row sets. Any "no markets match tag X" conclusion drawn from that parameter is void. `order=volume24hr&ascending=false` with `limit`≤100 and `offset` **is** honoured. |
+| §12 | (method) | Gamma caps `limit` at **100** and silently ignores larger values (`limit=5000` returns 100 rows). `offset` works, so full sweeps need paging. |
+| §11 | (brand) | Product renamed **Openout**; the wordmark is *generated*, not edited (`tools/rename-wordmark.mjs` measures the face and lays out `brand/svg/lockup-horizontal.svg`; `--check` fails if the old name is live or the mark drifted). `brand/svg/mark.svg` is never redrawn; its geometry is hash-pinned (`c33b4d5fd82b7acd`) in `brand/BRAND-KIT.md`, and the pin is re-verified against the file by a gate, not trusted. |
+| §11 | raster filenames imply size | Read from PNG headers: `app-icon-512.png` is **1254×1254**, `avatar-512.png` **1254×1254**, `og-1200x630.png` **1731×909** (aspect 1.904:1 vs 1.91:1), `brandboard.png` **1536×1024**. Filenames overstate nothing but do not match; a true 1200×630 derivative is still owed before the landing page ships. No rasteriser exists in the build sandbox, so these cannot be regenerated there — recorded as open, not silently shipped. |
+| §7 / brand colour | buy vs sell hues are distinguishable | **Overturned by P03 for text use.** `action.buy` vs `action.sell` differ by ΔL 0.040 (dark) / **0.008** (light); protan ΔE 9.0/6.9 — the same distance P02's own palette search rejected for chart series. `alert.critical` **is** `action.sell` (ΔE 0.0), and `outcome.no` sits ΔE 3.2–4.9 from both. No buy/sell pair reaches 4.5:1 in *both* themes. Consequence adopted in the design system: money magnitude is `text.primary`, direction is a mandatory `+/−` glyph + ▲/▼ caret in a fixed slot + filled/outline chip; severity never shares a row with outcome. Owned by `tools/component-colour-audit.py`. |
+| §7 | 600ms price-change flash | Breaks the motion ceiling the kit itself cites (≤300ms per transition). Retokened to **90ms in / 200ms out (290ms)**, background-only, no number animation. Owned by `brand/tokens.json` `motion.flash_on_change`. |
+| §7 | (method) | Order books are **not** usually one-sided: 22 sampled books, **0/22** fully one-sided, **8/22** with ≤5 levels on the near side; a Fed market measured **63 asks / 3 bids** (spread 996 ticks) against the "94 asks, zero bids" anecdote. Design for *near-empty*, and keep one-sided as a reachable-but-rare state. |
+| general | doc counts | Any count in a spec must be generated or checked: P03's hand-written "~468 named stories" was **594** off once the inventory was enumerated (1,062). |
