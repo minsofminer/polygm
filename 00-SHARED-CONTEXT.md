@@ -303,3 +303,26 @@ which artifact now owns the corrected value.
 | §7 | 600ms price-change flash | Breaks the motion ceiling the kit itself cites (≤300ms per transition). Retokened to **90ms in / 200ms out (290ms)**, background-only, no number animation. Owned by `brand/tokens.json` `motion.flash_on_change`. |
 | §7 | (method) | Order books are **not** usually one-sided: 22 sampled books, **0/22** fully one-sided, **8/22** with ≤5 levels on the near side; a Fed market measured **63 asks / 3 bids** (spread 996 ticks) against the "94 asks, zero bids" anecdote. Design for *near-empty*, and keep one-sided as a reachable-but-rare state. |
 | general | doc counts | Any count in a spec must be generated or checked: P03's hand-written "~468 named stories" was **594** off once the inventory was enumerated (1,062). |
+
+## 14. Contrast finding that binds the frontend phases (added 2026-09-17)
+
+**No foreground in this product may claim WCAG "AA-large".** The largest text token in the system is 13px
+(`density.font_size_px`), and the large-text exemption needs ≥18.66px bold or ≥24px. Therefore every hue used
+as text owes 4.5:1, not 3:1 — measured against the background it actually sits on, which for data surfaces is
+`bg.elevated`, not `bg.base`.
+
+What that rules out, with the numbers: `outcome.no #D55E00` is 3.87:1 (light/`bg.base`), 3.55:1
+(light/`bg.elevated`), 4.26:1 (dark/`bg.elevated`); `action.sell` is 4.43:1 (light/`bg.elevated`) and 4.38:1
+(dark/`bg.elevated`). So a YES/NO chip word, a BUY/SELL pill label, a whale badge, or a book-ladder price may
+**not** be painted in those hues. Adopted composition: `text.primary` word + hue on the outline/tint/depth
+bar (3:1 non-text). Recorded as `tokens.rules["hue-never-small-text"]`.
+
+Process lesson, for anyone extending the audits: `component-colour-audit.py` printed a grade of "AA-large"
+for the 3.0–4.5 band while failing only below 3.0 — and its own failure message cited the 4.5:1 body-text
+floor it was not applying. A grader can name the right bar and enforce a different one, so a permissive band
+needs a canary that must fail when the band returns (here: `CONTROL@hue as small text on an elevated panel`,
+verified by restoring the old grader and watching the gate report `canary BROKEN`).
+
+Unchanged and still owed by the brand owner: deepening the money reds (light `#b91c1c` → 6.47:1/5.93:1)
+would make a small coloured label legal again; the dark theme has no same-family red that clears 4.5:1 on its
+panels. `brand/BRAND-KIT.md` marks these values **fixed**, so this is a decision, not a task.
