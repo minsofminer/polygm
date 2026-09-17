@@ -326,3 +326,43 @@ verified by restoring the old grader and watching the gate report `canary BROKEN
 Unchanged and still owed by the brand owner: deepening the money reds (light `#b91c1c` → 6.47:1/5.93:1)
 would make a small coloured label legal again; the dark theme has no same-family red that clears 4.5:1 on its
 panels. `brand/BRAND-KIT.md` marks these values **fixed**, so this is a decision, not a task.
+
+
+## 15. Corrections from the P05 build session (added 2026-09-18, nothing above deleted)
+
+Every row is a measurement from `polygm-platform` (fixtures under `tests/fixtures/p05/`, live runs under
+`docs/verification/`), not a re-reading of the docs. Where an earlier section recorded something that turned out
+wrong, the earlier text stays and this section supersedes it.
+
+| Ref | What was believed | What the venue does, and the consequence |
+|---|---|---|
+| §12 (probe) | `cache_buster_works` — a query-string buster defeats the CDN cache on `/trades`. **SUPERSEDED 2026-09-18.** | The staleness is origin-side, not edge-side: the unbounded `GET data-api/polymarket.com/trades` view measured **236 s / 257 s / 277 s** behind at samples 20 s apart, with `cf-cache-status: HIT` and byte-identical bodies under `&_=<ms>` busting. `tools/p01-probe.json` is left as recorded (it is the diff baseline for `make probe-fresh`); the *conclusion* is void. Cache-busting appears nowhere in the product, and a gate check fails if it returns. |
+| — | `/trades` "latest page" is a fresh view. | It is a *view* that does not refresh. The fresh path is a bounded range: `?limit=100&takerOnly=true&start=<unix_s>&end=<unix_s>` measured **0–1 s** current, 3/3 samples, `cf-cache-status: MISS`. `end` must be ≈ `now + 60` because the indexer stamps some fills up to **+4.3 s** ahead of the clock; a range ending at `now` silently drops the newest fills. Every tape request in the product and in the harness is bounded, and `p05-gate-check.py` enforces it at the call site. |
+| §4 (data) | `GET data-api/trades?market=<id>` filters by token id. | It filters by **condition id**. A token id returns 200 with **0 rows**, which looks like an empty market. Separately, `clob…/trades` is authenticated (401 anonymous) — the public tape is the data-api one. |
+| §5 (venue) | A WS trade frame identifies a fill. | `last_trade_price` carries **no transaction hash**. So cross-source dedupe by an exact key is impossible and the design says so instead of faking it: **REST is the record, the socket is the latency layer.** The socket feeds the alert engine and the UI's "already booked" marker and never writes the durable tape; duplicate *alerts* are prevented by the rule's dedupe key + cooldown. |
+| §5 (venue) | `POST /books` batches book reads. | It returns **400 `{"error":"Invalid payload"}`** for `{"token_ids":[…]}`, `{"asset_ids":[…]}`, a bare array, the query-string form, and with `bids`/`asks` added — including a single valid token id. `GET /book?token_id=` is 200. The per-token budget and the memory arithmetic (2,000 books ≈ 16.5 MB) are sized for polling because batching does not exist. |
+| §5 (venue) | Book deltas need a sequence number to be trustworthy. | There is no sequence number, but `price_change` carries **`best_bid`/`best_ask` beside each delta** — that pair is the gap detector: our derived top of book must equal the venue's declared top. The `hash` field is recorded and diffed as a diagnostic only; one capture cannot establish what it hashes, and a check that cannot say what it compares is theatre. |
+| §12 | Fill prices are exact decimals. | `data-api/trades` returns some matched prices as IEEE float noise from the venue's own pipeline — **`0.1699999983` for 0.17, in 49 of 200 rows** of the recorded fixture. The strict 6-decimal parser refused them, so a quarter of the tape was missing and the failure read as a quiet market. Fills are parsed with a rounding parser (≤ 5e-7 of movement by construction); **`/book` levels and the order path keep the strict parser**, because a resting order at an off-grid price is a venue bug worth seeing. |
+| §5 (venue) | Up/down crypto markets are 5-minute. | `-updown-5m-`, **`-updown-15m-`**, 1h, 4h and daily all exist, and the bucket's start timestamp is **in the slug** — so the lifecycle needs no lookup table. 8,640 up/down markets per day per asset is why prune policy is a first-class feature. |
+| §12 | `feeType` is a closed enum. | Seven values across two runs of the same top-100 sample (`crypto_fees_v2`, `culture_fees`, `economics_fees`, `finance_prices_fees`, `politics_fees`, `sports_fees_v2`, `sports_fees_v3`), and the sets differed run to run. Consequence, and it is a money consequence: an unrecognised `feeType` means **charged and flagged**, never free, and no code may branch on "is this in the list I hard-coded". |
+| §12 | A transient failure and a shape change are the same event. | They are not, and the checker must say which it saw. `datasource-probe.py --check-cache` prints status and payload per failing id and labels each line `TRANSIENT?` or `SHAPE`; `make probe-fresh` propagates the exit code (it used to be wrapped so that nothing could fail). |
+| §13 (schema) | `markets` has a `closed` flag. | **It does not.** P04 models resolution as `tokens.is_winner IS NOT NULL` and tradeability as `accepting_orders = 0`. Writing `is_winner = 0` for an unresolved market is worse than a schema error: it makes every open market a *loss* in the `smart_money` sample. NULL-until-resolved is the only legal value. |
+
+Four process lessons, for whoever builds P06–P16:
+
+1. **One freshness source per transport.** A REST poller that advances a socket's clock hides an outage: the
+   composite (worst-of) keeps reading `ok`, the UI keeps promising live data, and the page that exists to catch
+   the outage says nothing. My own chaos harness shipped exactly this and it cost a full 300-second run before I
+   saw that check A was failing for a reason inside the test.
+2. **A comparison over empty data must not pass.** "No duplicate alerts" with zero alerts fired, and "no missed
+   large fills" against a reference that never reached the window, were both green in a run I reported. The gate
+   now requires non-vacuity (`alerts > 0`, `live fills seen > 0`, `covered == total > 0`) and refuses the artifact
+   otherwise. `--fast` runs may not contain deep-only measurements.
+3. **A portable subset must never be silently smaller.** `build-sqlite-migrations.py` treats `ALTER TABLE` as
+   Postgres-only and dropped every `ADD COLUMN`, so dev/CI ran a schema missing columns production had while
+   every migration test passed. It now refuses with the lesson in the message. Prefer a phase-owned
+   `CREATE TABLE` (0007) to an `ALTER` on someone else's table.
+4. **Deriving a user-visible threshold from a re-rendered value is a bug factory.** The metadata version diff
+   first compared a Gamma payload against our own stored translation and wrote a "market changed" row for every
+   market on every pass (`5.0` vs `"5"`), burying the one row that mattered. `market_stats.meta_json` now stores
+   the venue's tracked fields verbatim, and a diff is between two observations of the same source.
