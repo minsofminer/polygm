@@ -398,3 +398,52 @@ lessons for P07–P16, all of them bought by a probe that tried to make the answ
    reconcile-before-requeue ordering it claimed to protect. Two other survivors were genuinely *equivalent*
    mutants (a `min(share, observed)` line made "pay the estimate" inert; the tick-level guard is defence in depth
    behind the `enable()` guard the gate owns) — retarget those, never delete them.
+
+## 17. The P07 security plane, and what its own tools caught (added 2026-09-18, nothing above deleted)
+
+Built in `/home/user/polygm-platform` (`origin/main` = `2ccd7ed`). Measured, not asserted: `make p07` → 32/32 in
+45 s; `make drill-p07` → 10,000 wrapped keys revoked (42 ms of our own half, 20 batch statements), 0 of 800
+sessions surviving the global revocation, kill switch engaging with the queue sweep in the same statement;
+`make gate-p07-mutate` → 28 planted weaknesses, 28 killed, 0 survived; suite 641 tests OK (141 of them P07);
+`make p06` still 31/31; contract 176/176; lint 8/8 with 8/8 canaries; `ci-log-scan --sources` 133 files, 0
+findings, `--self-test` 0 failures; `dependency-scan` pass.
+
+**Four product bugs, all found by the phase's own checks rather than by review.**
+
+1. `_principal` built its authorisation operation from the request URL instead of the matched route template, so
+   every served route with an identifier in its path answered 500 `AUTHZ_UNDECLARED` to an *entitled* caller. The
+   suite missed it because its fixtures authenticate with a dev header, which takes the other branch: ~600 green
+   tests were not exercising the path the bug lived on. Anything that bypasses authentication in a fixture is now
+   assumed to be blind to authorisation bugs — pair it with at least one real-session test.
+2. The five P07 audit tables were append-only in the generated SQLite twin and fully editable in Postgres: the
+   triggers had gone into `db/migrations-sqlite/_append_only.sql` by hand and never into `0009_security.sql`. A
+   twin-only invariant is a test-suite-only invariant. `gate:c11` now asserts the declaration in the shipped
+   migration *and* exercises each table with a row in it (an `UPDATE` against an empty table never reaches a
+   trigger and reads as "mutable" — the vacuous-check shape bit twice this phase).
+3. `totp.REQUIRED_FOR` named `address_remove` and no route asked for a code, while the contract already documented
+   a 403 on that path. Declared-but-unenforced is the default failure mode of a policy table: the next phase that
+   adds an action to a `REQUIRED_FOR`-style list should add the gate check that asks the route.
+4. `redact` scrubbed 14 shapes but not a connection URI's password, while `ci-log-scan` refused builds for
+   exactly that shape. Redactor and scanner are two independent matchers over the same threat; they drift, and the
+   drift is invisible until you diff their coverage on purpose.
+
+**Generator discipline, since §16 item 3 asked for it:** `tools/build-sqlite-migrations.py --write` must be re-run
+after *every* migration edit and `--check` (wired as `make sql-sqlite-check`, part of `make check`) fails on
+staleness. Note what it can and cannot do: it translates the append-only trigger block into the twin and treats
+every other `CREATE TRIGGER` / `CREATE OR REPLACE FUNCTION` as PG-only. So a *conditional* trigger (e.g.
+`polygm_withdrawal_hold_holds`, which refuses an UPDATE that shortens a withdrawal hold) exists in production only,
+and the gate asserts its declaration in the file rather than pretending the twin carries it. Say so in the
+migration comment — a reviewer who cannot find the invariant in the SQLite schema should find the sentence.
+
+**Two rules that bind later phases.** A TOTP code is single-use inside its 30 s window, so two money actions are
+one window apart by design; fixtures advance the app's clock by a window (`_advance_clock`, mirrored by
+`Plane.advance_clock`) instead of sleeping or bypassing the route. And the admin surface deliberately answers 503
+`SIGNER_UNAVAILABLE` when no admin token is *configured* (a misconfiguration must not look like an attack in the
+dashboards the on-call reads) while a *wrong* token is 403 `ADMIN_REQUIRED` — do not "fix" the 503 into a 401.
+
+**Where P07's honesty is load-bearing, and what it does not prove:** the 10,000-key revocation number is bounded
+by the provider's revoke rate, not by our batch arithmetic (at 1 call per wallet ≈ 1 call/s that is ~2.8 hours),
+and P13 owns measuring it; SIWE was deliberately not built (P10, nonce-bound typed payload); the geofence ruling
+is "no app-layer block", written with its reasons and a counsel sign-off item; 14 `[UNVERIFIED]` markers each carry
+a numbered launch-checklist bullet, which `gate:c30` pairs mechanically. The drill ends with eight numbered things
+it does not prove — the part a passing run makes people skip, and the part a reviewer should read first.
