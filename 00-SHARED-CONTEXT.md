@@ -366,3 +366,35 @@ Four process lessons, for whoever builds P06–P16:
    first compared a Gamma payload against our own stored translation and wrote a "market changed" row for every
    market on every pass (`5.0` vs `"5"`), burying the one row that mattered. `market_stats.meta_json` now stores
    the venue's tracked fields verbatim, and a diff is between two observations of the same source.
+
+## 16. Corrections from the P06 build session (added 2026-09-18, nothing above deleted)
+
+P06 landed in the platform repo at `9c1da25`: 31/31 gate checks, 500 tests, 7/7 chaos assertions against a real
+`SIGKILL`, kill-switch drill 5/5 with worst refusal 460 ms against a 1000 ms budget, 26/26 mutants killed. Four
+lessons for P07–P16, all of them bought by a probe that tried to make the answer wrong:
+
+1. **A refusal is only evidence if it is attributable.** "0 orders placed while the switch was engaged" proved
+   nothing until the same path was shown placing an order one second earlier, with the switch off, and the
+   refusal *reason* named the switch. Chasing that requirement found two real product bugs (copy queued an
+   intent whose Activity line read "copied" during a halt; automation had no view of the switch at all) and two
+   fixture bugs — an un-armed rule (a rule must be run in dry mode before `enable` accepts it) and a refusal
+   whose reason was `min interval: next allowed in 59319ms`, i.e. a per-rule throttle that had pre-empted the
+   global stop. A global halt now outranks a per-rule cooldown in the evaluation order, exactly as it does in
+   preflight (`kill_switch → … → user_limits`).
+2. **Measure the propagation window, do not assert it away.** An out-of-process child re-reads the switch every
+   `KILL_POLL_MS` (250 ms) and acts once per tick (100 ms), so work queued at the instant of engagement
+   legitimately goes out. The drill therefore reports both numbers: latency to the *first attributable refusal*,
+   and **zero** venue POSTs after `grace = poll + tick + slack`. A harness that demanded instant silence would
+   have been fixed by weakening the product, which is the wrong direction.
+3. **A generated twin needs a byte-for-byte comparison, not a subset one.** `c_schema_parity_and_append_only`
+   asks that every source `CHECK` appear in `db/migrations-sqlite`, so it passed while the twin lagged my own
+   migration edits and carried none of the P06 append-only triggers. Re-run `build-sqlite-migrations.py --write`
+   after *every* migration change; P07 should make the check compare generator output to the committed file.
+4. **A survived mutant is usually an indictment of the check.** Ten of 29 anchors did not exist in my first
+   mutation harness (the anchor pre-flight turns that into a hard error rather than a smaller proof set), and the
+   survivors said more about the gate than the product: the fee check asserted `floor` on an example with no
+   remainder so "rounds up" was prose; the breaker check exercised only the consecutive-failure trip, never the
+   50 % error-rate trip; the recovery check ran `tick(reconcile=False)`, which cannot see the
+   reconcile-before-requeue ordering it claimed to protect. Two other survivors were genuinely *equivalent*
+   mutants (a `min(share, observed)` line made "pay the estimate" inert; the tick-level guard is defence in depth
+   behind the `enable()` guard the gate owns) — retarget those, never delete them.
