@@ -447,3 +447,74 @@ and P13 owns measuring it; SIWE was deliberately not built (P10, nonce-bound typ
 is "no app-layer block", written with its reasons and a counsel sign-off item; 14 `[UNVERIFIED]` markers each carry
 a numbered launch-checklist bullet, which `gate:c30` pairs mechanically. The drill ends with eight numbered things
 it does not prove — the part a passing run makes people skip, and the part a reviewer should read first.
+
+## 18. The P08 shell, and the class of bug only a served response can show (added 2026-09-19, nothing above deleted)
+
+P08 is done: `polygm-platform/web/` is the whole page layer — 19 routes (`/`, `/markets` as the anonymous price
+surface, five `(auth)` screens, seven `(app)` screens, `/tma`, and `app/api/[...path]` as the authenticated proxy),
+15 checks in `tools/p08-gate-check.py` with 11 canaries, `docs/P08-frontend-shell.md`, and the two recorded
+artefacts (`P08-bundle.txt`, `P08-gate.txt`). `make p08` builds the web app, re-measures the first-load budget and
+runs all 15; `make p08-offline` is the 14 that need no build, `make p08-selftest` proves the checks can fail. The
+headline numbers: 15/15 and 11/11, 95 web tests in 15 files, first-load 187.6 KB on `/` against a 200 KB budget
+(worst route 190.3 KB), 223 dictionary keys of which 181 are used, `schema.gen.ts` 1,875 lines from a contract that
+passes 177/177.
+
+**The one that matters.** `pgm_at` was written as a bare expiry by `src/auth/refresh.ts` and read as
+`"<expiry>:<token>"` by `src/auth/server.ts`. Both halves had a green unit test. Every request after a rotation
+therefore found no token and refreshed again, and the second refresh presents a *spent* single-use token, which
+upstream reads as theft and answers by revoking the whole family: the user is logged out on every device because
+four widgets mounted at once. The fix is not only the shape — it is that **the writer and the reader of a
+two-ended contract now live in one file with a test that reads both ends**, and that the property is exercised
+against `next start` + uvicorn (`gate:c11`), not against a `TestClient`. A related gap in the same module:
+single-flight coalesced requests that arrived *together*, so a straggler that arrived a few milliseconds after the
+winner re-presented the spent token; a settled rotation is adoptable for 2 s, and the cost (two seconds of
+reuse-detection granularity) is written in the module rather than traded silently.
+
+**What the phase's checks caught besides that** (`docs/P08-frontend-shell.md` §2.8 keeps the full 14): `formatCents`
+validated with `| 0` and wrapped above $21.47 M; `i18n-check` matched ~135 of ~197 lookup sites and reported a clean
+dictionary; `BillingClient` labelled *tape freshness* as "entitlement could not be read", and `PLANS` carried a
+price no JSX rendered; a `var(--pgm-z-sticky)` that was never declared (a dropped custom property is legal CSS, so
+the build said nothing) and a doc marker naming a test class that had never existed. Every one of those is a
+control reading the wrong signal, and the answer was the same each time: keep the rule, fix the matcher, add the
+planted violation that proves the matcher still bites.
+
+**The checker was the buggiest component**, which is worth recording because it is not excused by being tooling: a
+regex comment-stripper deleted `" https://telegram.org"` out of a CSP string and turned a correct config into a
+"missing CSP" finding; `with HTTPConnection(...)` is not a context manager, so the boot poll raised `TypeError`,
+swallowed it, and timed out after 75 s looking like a product failure; a pattern written inside a nested heredoc
+landed as `r"\\s"` and silently matched nothing for a whole revision; fixed ports 8099/3112 collided with a
+leftover process; `ci-log-scan.py --sources web/.next` returned `unrecognized arguments`, which a caller read as
+exit 1 = "clean". Two rules for later phases: **every gate check ships with a canary that plants its own
+violation**, and **a mode's wiring is itself tested** (`ci-log-scan --self-test` now runs `--built`/`--file` for
+real over a temp tree, because a mode that never runs cannot fail).
+
+**Cross-phase changes P09+ inherit.** (1) `tools/ci-log-scan.py` has a third mode, `--built PATH`, which applies
+`SOURCE_RULES` to generated output — the log ruleset on minified core-js produced 13 findings and taught nobody
+anything; if you want a stricter rule, add it to `SOURCE_RULES`, not to the invocation. (2) `tools/dependency-scan.py`
+enforces exact pins, and it *found* P08's caret ranges, so every `web/package.json` dependency is pinned exactly
+and P09's additions must be too (`npm install` will happily widen them; `make p07` will refuse). (3) P03's token
+generator now emits `:root`-wrapped breakpoints, and `web/styles/{tokens.css,theme-colors.json}` are generated
+mirrors checked by `tools/build-web-tokens.mjs --check`; `web/**/styles/**` and `*.test.*` are excluded from the
+literal ban because they *define* the values. (4) The route ledger (`web/src/api/routes.ts`, 40 entries: 19 built,
+21 refused-by-design), the contract, and the doc's launch list are triangulated by `gate:c1`; `globalSearch` is the
+only `whileMissing: "hides"` route and it is gated by `ROUTES.globalSearch.built` in the command palette. Adding a
+screen in P09–P12 means a ledger entry, dictionary keys, and a `[owner · test]` marker in that phase's doc — the
+gate refuses the three when they disagree, including when the doc renumbers and the code does not.
+
+**Deliberate declines, restated so they are not re-litigated:** no virtualisation (a 64-row tape cap, `TAPE_ROW_CAP`,
+because a windowed list of financial rows that drops the row a user is reading is worse than a long list), `en`-only
+with a key contract instead of a translation pipeline, two resizable rails with the centre as the remainder, flash
+at 90/200 ms (the prompt's 600 ms was rejected as a distraction), `WidgetBoundary` per widget rather than per page,
+and no `X-Frame-Options` anywhere (a per-origin CSP is the only correct frame policy for a page that is framed by
+Telegram and by nobody else).
+
+**What this phase did not and cannot prove here:** there is no browser in this workspace, so `tma-real-device`,
+Lighthouse, the 60 fps rail-drag trace and Storybook are `[UNVERIFIED]` with numbered launch items (3 and 4 among
+them), and `measure-first-load.mjs` reports *bytes fetched per document* — a payload claim, not a rendering one.
+`git` state was damaged twice by environment snapshot rewinds (`.git` replaced with an older `main`, and
+`web/node_modules` + `web/.next` deleted); the recovery that worked is `git fetch` + `git reset --mixed <tip>`
+after confirming the remote tip via the API, and `npm ci` — never `--hard`, never `checkout .`.
+
+**Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
+7), and P08's proxies therefore refuse money mutations through the same `whileMissing` ledger rather than wiring
+them "for now".
