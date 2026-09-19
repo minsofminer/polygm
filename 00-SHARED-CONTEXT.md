@@ -518,3 +518,76 @@ after confirming the remote tip via the API, and `npm ci` — never `--hard`, ne
 **Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
 7), and P08's proxies therefore refuse money mutations through the same `whileMissing` ledger rather than wiring
 them "for now".
+
+## 19. The P09 markets surfaces, and the class of bug that only a rendered screen shows (added 2026-09-19, nothing above deleted)
+
+P09 is done in two commits on `polygm-platform` (`d54d5e7` backend + contract, `0ad8830` web + doc + gate). The
+product now has the three screens a prediction-market terminal is for: `/markets` discovery, `/market/[market_id]`
+with the ladder and the chart, `/event/[event_id]` with 128 outcomes and the probability-sum invariant. The
+endpoints behind them are `/v1/markets/{market_id}/history` and `/holders` and `/v1/events/{event_id}`, all in
+the ledger as `built: true` under owner `P09`. Numbers: backend `make test` 674 OK, `check-openapi` 200/200,
+`make lint` 92 files 0 findings; web 145 tests in 20 files, `tsc` clean, dictionary 345 keys 0 missing;
+`make p08` re-run with P09 in the tree is **15/15** (worst route `/markets` 198.0 KB of a 200 KB budget,
+route-level splitting proven — the landing document still does not fetch the money module);
+`make p09` is **7/7** with 7/7 canaries, recorded in `docs/verification/P09-gate.txt`.
+
+**The one that matters.** `kind="price"` in the number layer takes **tick units**; the ladder was feeding it
+**micro-units**. On a 0.01-tick market that is a 100× error, and on the 0.001-tick market this phase exists for it
+renders `.001` as **`1.000`** — a plausible price, ten times the size, on the market whose entire difficulty is its
+tick. Both spellings of the value are integers, both pass every pure-function test, and the compiler has no opinion:
+the bug lives in the *contract between* a pure function and a renderer, which is why the first screen test found it
+within a minute of being written. The same mismatch put the size column out by 10^6 (232,978,723 shares rendered as
+`232978.7B`), and a third instance multiplied an already-cents spread by 100 and printed a 0.2¢ spread as `$20.00`.
+The permanent answer is `priceUnitsOf` / `shareUnitsOf` in `web/src/lib/depth.ts`, delegating the parse to
+`src/money/cents.ts` so the app still has exactly one price parser — and the rule that **a screen test earns its
+place by rendering**, because a bug in the seam between two tested units is invisible to both.
+
+**The contract was the other seam.** `SuccessBody` unioned *every* documented response, so the body type of the book
+was `{bids, asks, …} | {error: …}` — formally correct, useless in practice, and `book.bids` was a type error on a 200.
+Narrowing it to 2xx exposed a second trap: `Extract<keyof R, \`2${string}\`>` matches neither `200` nor `"200"`, so
+the "narrowing" silently produced `unknown` while every check stayed green. Then the body typed as `unknown`
+revealed the real finding: the API has always served `cumShares` on every level and six fields on the market detail,
+and `contracts/openapi.yaml` documented none of them. The fix was the contract plus `npm run gen:api`, not a local
+interface — a field the ladder cannot work without is not optional documentation.
+
+**What the phase's checks caught besides that** (`docs/P09-frontend-markets.md` §2.8 keeps the five): the p08 gate's
+c8 was reading a bundle measurement produced by a server whose process was still listening on the measure port from
+a previous run, so it compared two builds and reported neither; `app/markets/page.tsx` rendered an error paragraph
+instead of the client component when the SSR read failed, which both dead-ended the reader and quietly removed the
+markets payload from that route's measured cost; a hand-typed `BookPayload` was flagged by c2, so all four P09 body
+types now come from the schema; c14 caught the same widget composed at two JSX sites (one per branch) — a retry path
+and a boundary count are the same question about who composes what. Two gates' scanners exist for the money path and
+for freshness, and P09's c3/c4 *call* `tools/p08-gate-check.py`'s functions over their own files rather than writing
+a second opinion; a change to the rule changes both gates at once.
+
+**The checker was, again, the buggiest component.** `p09-gate-check.py`'s canaries caught four of its own defects on
+first run: a ledger reader using `\{([^}]*)\}` truncating at the `}` inside `/v1/markets/{market_id}/history`, so an
+entry that *was* built and owned read as neither; the `[UNVERIFIED]` pairing check testing whether a slug appears
+*anywhere in the document* (it always does — it is in the marker being checked) instead of in a numbered launch item;
+comment-blind scans reporting `parseFloat` from a doc block that quotes the call it bans and `dangerouslySetInnerHTML`
+from a comment saying it is never used; and a probe shelling out to `npx tsx`, which the repo does not have. Each is
+the same failure as the ones above: a control reading the wrong signal, which is why the standing rule is that every
+check ships with a canary that plants its own violation.
+
+**Cross-phase changes P10+ inherit.** (1) `brand/tokens.json` now carries `rail_left`, `rail_right` and
+`book_max_block`, emitted by `tools/build-tokens.mjs`; the two rail widths had been used since P08 against `auto`
+fallbacks and **declared nowhere**, which is a layout that looks right for as long as nobody asks which two widths it
+is laying out against. (2) `SuccessBody<Path, M>` in `web/src/api/types.ts` is the only way to name a response body;
+if a field is missing from the implied type, the fix is the contract plus `npm run gen:api`. (3) The flash policy's
+`source: "ws" | "rest"` parameter is the design-system-level answer to "should this move?" — the book polls REST
+today and therefore never flashes, by policy, and the day `/v1/live` carries the book the ladder inherits rate
+limiting, rounding-window suppression and the reduced-motion fallback by passing `ws`. (4) `MAX_ROWS = 400` on the
+outcome table and `SUMMARY_AT = 5` on the discovery card are the two caps this phase chose over virtualisation;
+`docs/P09-frontend-markets.md` §3 states what was not built and which launch item carries it.
+
+**What this phase did not and cannot prove here:** there is still no browser, so Lighthouse/LCP on the three P09
+routes, a 10 Hz frame trace of a 200-level ladder, virtualisation's necessity, touch behaviour on real hardware,
+screen-reader output, `prefers-reduced-motion` and the Storybook states are `[UNVERIFIED]` with numbered launch items
+1–9 in `docs/P09-frontend-markets.md` §4. The measured build is `next build --webpack`, not Turbopack: the sandbox has
+~700 MB free and Turbopack's builder is OOM-killed there, so the bundler is part of the recorded measurement. The
+`.git` rewind recurred a **fourth** time (tree current, `.git` at a P05-era tip, `origin` missing entirely); the same
+recovery worked — token from `/home/user/.secrets/tokens.env`, `git remote add`, `fetch`, `git reset --mixed` — and
+the rule stands: check the remote tip before claiming drift, never `--hard`, never `checkout .`.
+
+**Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
+7). P09 shipped no money mutation: the ladder hands a price string to P08's ticket and nothing else.
