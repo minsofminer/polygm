@@ -736,3 +736,47 @@ time: read the remote tip before claiming drift; never `--hard`, never `checkout
 
 **Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
 7). Next: P11 D4–D7.
+
+## 22. P11 D4: your own row on every board, and the setting that decides who may tie it to you (added 2026-09-19, nothing above deleted)
+
+D4 is pushed (`2299c75`). The reader now sees their own standing on all nine boards (six boards, four category
+boards), gets that row **pinned when it is off the page** with the gap that would move it, is told what to do when
+the gate refused the wallet, and decides whether that row carries an account handle.
+
+**The kit's sentence cannot be taken literally, and the resolution is the deliverable.** "Appear on public
+leaderboards, or stay private" collides with the integrity rule §21 already fixed: a board that drops whoever asks
+not to be listed is a board that reports a flattering field, and blown-up accounts are shown rather than hidden.
+D4 therefore splits the sentence: **inclusion is not optional, identity is, and it defaults to off.** A private
+account is still ranked on every board it qualifies for; what "private" withholds is the *link* — no dossier
+resolves, no name finds the account, nothing in any public payload connects `w_…` to `u-…`. The screen says the
+half a user assumes wrongly, verbatim: "private removes the link to this account, not the row". The consent write
+is an append-only `audit_log` row (action `leaderboard.identity`) carrying the previous state, so "I never agreed
+to that" has an answer that is not a shrug.
+
+**The privacy scanner is worth more than the feature.** `privacy_findings` walks every public payload the phase
+can produce and fails the gate if a withdrawn handle appears in any of them; it is canaried in both directions.
+Writing it forced two decisions: the account's own `/me` and `/identity` **keep** the handle on opt-out ("kept,
+not published") while every published row loses it — the first run of c18 failed on exactly that, which is what a
+scanner is for — and opt-out **keeps the row and the rank**, which c18 asserts, because that is what the copy
+promises.
+
+**Two bugs found on the way out of D3.** (1) `newIdempotencyKey` in `web/src/api/client.ts` joined its scope and
+its random half with a **colon**, which `_IDEM_RE` (`^[A-Za-z0-9_-]{8,128}$`) refuses: every mutating request
+without a caller-supplied key was answered with a 422 about a header the client had just generated itself. No
+screen showed it, because the exercised screens pass their own key — it surfaced only because D4 added a mutation
+nobody passes a key for. The shape is now asserted against the server's own regex in `client.test.ts` and by a new
+**P08 c16** (contract pattern, `_IDEM_RE`, and the client's producer must be one rule), canaried with the
+colon-joined key. (2) The D3 board panel shipped class names and **no stylesheet rules** — the one way a screen can
+be finished and still look broken; D4 added the rules for both the board and the strip, and the strip's z-index uses
+the design system's existing sticky rung rather than a literal (P08 c5).
+
+**Numbers at this point.** Backend **927 tests OK** (39.9 s), `check-openapi` **450/0**, `tools/p11-gate-check.py`
+**18/18 with 12/12 scanners canaried** (16.2 s; c17 walks the self-rank, c18 the identity), `tools/p08-gate-check.py`
+**16/16** (13/13 canaries) and `tools/p09-gate-check.py` **7/7**, web **384 tests in 42 files** with `tsc` clean,
+`npm run measure` passing at **199.3 KB** worst route, and `tools/build-sqlite-migrations.py --check` clean at
+**107 tables / 54 triggers**.
+
+**Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
+7); the ledger in `web/src/api/routes.ts` is on the wire, so anything added to it is a byte every phone pays for.
+Next: P11 D5 — referrals (reward on the referee's first matched order over a notional threshold, dedupe, clawback,
+hard self-referral block).
