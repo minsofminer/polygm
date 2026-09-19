@@ -591,3 +591,82 @@ the rule stands: check the remote tip before claiming drift, never `--hard`, nev
 
 **Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
 7). P09 shipped no money mutation: the ladder hands a price string to P08's ticket and nothing else.
+
+## 20. P10 complete (the terminal, D1–D9): the engines that had to exist before the screens, and the four refusals that make them safe (added 2026-09-19, nothing above deleted)
+
+P10 is done on `polygm-platform` in nine commits — D1–D7 (`32023ab` … `861663a`, closed with the 60fps measurement
+in `92d6d4f`) and the two engines behind the last two screens in `76563e3`. The product now has the eight surfaces
+the phase's own list named: `/terminal`, `/trader/[anon]`, `/whales`, `/radar`, `/portfolio`, `/copy`,
+`/automation`, `/alerts`. Numbers at close: backend **822 tests OK**, `check-openapi` **365 passed / 0 failed**
+over a 46-path / 50-operation contract, web **339 tests in 37 files** with `tsc` clean and the dictionary at
+**825 keys, 782 used**; `next build --webpack` re-measured (**`/markets` 199.6 KB of the 200 KB budget**,
+route-level splitting proven), and all three gates re-recorded against that build — **P08 15/15, P09 7/7, P10
+15/15 with 12/12 canaries**, in `docs/verification/`.
+
+**D8/D9 were read wrong once, and the correction is recorded rather than absorbed.** A phase-start reading put the
+automation and alert engines in P11; `prompts/P10-frontend-terminal.md` lists them as D8 and D9, and
+`prompts/P11-leaderboard.md` is the leaderboard, rankings and referrals. Deferring them would have left P10 with
+two screens missing and P11 with two deliverables it never asked for. The reconciliation is `docs/P10-frontend-terminal.md`
+§5.1, so the next phase does not re-derive it from chat.
+
+**The four refusals, because they are the feature.** (1) A rule is saved as a dry run and there is no field that
+makes it live: `POST /v1/automations` writes `enabled = 0`, and arming is a second endpoint that refuses without a
+`dry_run_completed_ms` the engine itself wrote (`DRY_RUN_REQUIRED`, with the next step named) — dry-run is a *path*
+through an evaluation, not a checkbox. (2) While the daily-loss halt stands, every money-moving path refuses
+(`HALTED`) and every rule reads `halted` even when its `enabled` flag is 1, because halted outranks enabled and
+calling that "active" hides the one state D8 asks to be loud about. (3) A channel the plan does not cover is
+refused at save time with the plan named (402 `PLAN_REQUIRED`), not at fire time. (4) The 5-minute crypto entry
+template is *listed* with the fee arithmetic that withholds it (`available: false`, `blocking_reason:
+no_measured_edge`) rather than dropped — a catalog that hid it would make a user guess whether the feature is
+missing or the maths said no, and the second is worth reading. Pausing is always allowed: the safe direction must
+never sit behind a precondition.
+
+**The bug the gate's own fixture found.** Saving the smallest legal rule — the builder payload minus its loss
+ceiling — returned `INTERNAL`. `automation_rule_policy` has `CHECK (kind = 'auto_redeem' OR max_loss_micro > 0)`,
+so the constraint arrived as a 500 with nothing about the missing field, and the *client* was the stricter of the
+two (the form already refused a zero ceiling). A database CHECK surfacing as a service fault is a missing
+validation: the write now answers 422 naming `maxLossMicro`, and the regression test asserts both directions
+(refused for an exit rule, saved for `auto_redeem`, which cannot add risk because it cannot take a position).
+Two uses of one lesson: **the server is the authority, the form is a convenience, and when they disagree the
+server is the one that is wrong.**
+
+**The gate that reported a false FAIL.** Two D9 paths were compared against the contract all along, but keyed by
+verb (`("POST", "/v1/alerts")`) because a GET and a POST on one path answer different status sets; the gate's
+membership test only recognised the bare-key spelling and reported them unguarded. A gate that cries wolf gets
+edited around, which is worse than no gate, so the test now accepts both spellings and says why in a comment.
+Separately, the staleness rule that caught the D8/D9 bundle (`the measurement is older than the newest source
+file`) fired again the moment render tests were added — the rule is mtime-based over `web/src`, deliberately, and
+the answer is to rebuild and re-measure, not to narrow the rule.
+
+**What a render test earns its place for, again.** The alerts list and the alerts settings *write* disagreed about
+the settings shape — the list returned the raw row, the write returned the row plus `quietHours`/`digestNow`, and
+the screen reads `settings.quietHours.note` on both. Every pure function on both sides was correct and green; the
+seam was the fault. One `_settings_view(uid, at)` now serves both reads, with a regression test named after the
+screen's read. The same stretch produced the money-path copy of P09's class of bug: a probability rendered through
+the cents helpers (`formatCents(microToCents(620000))` → `0.0062`), because cents are hundredths of a dollar and
+0.62 is not money. Prices now have their own integer path (`priceMicroText` / `priceMicroFromText`, `null` on
+garbage), and the rule is **one parser per unit — money through the money layer, probabilities through the price
+layer, never one through the other.**
+
+**The screen is the engine's vocabulary, not a transcription of it.** The builder's trigger and action kinds,
+the AND/OR joiner map and the engine's limits (`maxLeaves`, `minIntervalNs`-class constants) are read from the
+API's own vocabulary read, which reads the engine; a form that offered a kind the engine refuses would be a form
+that saves rules which can never fire. Concretely: `cancel_open` is not offered an "all" scope because the engine
+refuses that scope, and the ninth row is refused with the engine's own limit before anything is sent.
+
+**What P11 inherits, deliberately.** `prompts/P11-leaderboard.md` keeps its six boards, its integrity rules, its
+referral dedupe and its SSR pages unchanged. Two things built here are already load-bearing for it: the gate's
+`win_rate_findings` / `threshold_findings` scanners (a board that prints a win rate under its sample gate, or a
+badge with no visible rule, fails the same scanners P11 will be held to), and the radar's row shape — wallet,
+matched markets, bought/sold, realised PnL, win rate with its gate, classification with its rule — which is the
+row a leaderboard needs and should be extended rather than re-derived.
+
+**The `.git` rewind recurred (fifth time)**, in the *spec* repo this time: tree current, `.git` sitting at the
+P05-era tip `d9688c2`, no remote configured. The same recovery worked and is unchanged: token from
+`/home/user/.secrets/tokens.env`, `git remote add`, `fetch`, `git branch backup-pre-reset HEAD`, `git reset
+--mixed origin/main`, confirm the tree is clean against the tip, then commit. **The rule stands: check the remote
+tip before claiming drift; never `--hard`, never `checkout .`.**
+
+**Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
+7). Nothing in P10 moves money: `/automation` and `/alerts` write rules, and no loop fires them without a dry run
+the engine recorded. The next phase is the kit's P11 — the leaderboard, rankings and referrals.
