@@ -670,3 +670,69 @@ tip before claiming drift; never `--hard`, never `checkout .`.**
 **Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
 7). Nothing in P10 moves money: `/automation` and `/alerts` write rules, and no loop fires them without a dry run
 the engine recorded. The next phase is the kit's P11 — the leaderboard, rankings and referrals.
+
+
+## 21. P11's first three deliverables: the boards, the ranking API, and the screen that reads a standing (added 2026-09-19, nothing above deleted)
+
+`prompts/P11-leaderboard.md` is being built in order. **D1** (specification, integrity rules, pure ranking engine)
+and **D2** (the rankings API, plus the seeded population the boards are demonstrated on) are pushed, and **D3**
+(the standing a wallet can read back — badge, percentile, the gap to the place above, the 30-day sparkline, a
+comparison of up to three wallets, and follows) is built and green. D4–D7 remain: self-rank and privacy,
+referrals, the public SSR pages, the anti-gaming dashboard.
+
+**Six boards, one formula, and the default says what it is.** `risk_adjusted` is the default and is *stated*, not
+implied: trimmed net realised divided by `max(largest drawdown, 2σ)`, integers only, the best market excluded only
+when it is profitable, and the lucky-gambler share clamped to 10000 bps. Sorting is by the field the board is
+named after — the heading is a claim about the order, and a `win_rate` board ordered by `scoreBps` was a real bug
+this phase (pinned now by a canary and a rank test). Tie-breaks run score → settled → drawdown → wallet id, so
+the order is total and a recompute cannot shuffle equals.
+
+**The phase's acceptance sentence is an engine property, not a screenshot.** Rank 47 sits above nothing and below
+rank 12 at the gate pair: `w_32371216f9` (rank 12) has **48 settled markets and 93,333 bps of score**,
+`w_a945dde868` (rank 47) has **26 settled and 5,000 bps** — the smaller sample is *below*, and `/why` says so in
+one sentence, because sample size decides eligibility and never order. `/rank` then expresses the distance in the
+board's own unit (`625 bps behind …, 5626 bps would pass them`), which is why the endpoint carries
+`orderField`/`orderUnits` per board rather than a fifth vocabulary of "points".
+
+**Three refusals D3 adds to the API's contract.** (1) A comparison is **one** read of **one** board: three
+separate `/rank` calls assembled by the client can disagree about window and recompute instant, so
+`/v1/leaderboard/compare` answers once and takes its pairwise sentences from the engine, with `verdict` computed
+from the ordered array rather than from `rows[0]`. (2) A non-pseudonym is refused **before** anything is echoed —
+`anons=0x…` is a 422 naming the field, and the response never carries an address back (the gate's c16 canary
+plants exactly this; an earlier build echoed it, which is how the canary earned its place). (3) A **follow is a
+watch, not a copy config**: `trader_follows` is keyed by pseudonym, idempotent per `Idempotency-Key`, unfollow
+reports whether a row existed, and the tests assert `/v1/copy/configs` is untouched. Following is a read; copying
+is money and stays in P10's D7.
+
+**2.9 KB of prose was on every phone's first load, and the budget caught it.** D3's four routes took `/markets`
+to **200.7 KB against the P08 200 KB budget** — a fresh, post-build measurement, so the failure was the number and
+not a stale artefact. The cause was not the new screen: `web/src/api/routes.ts` is imported by the API client, so
+every key, path, flag *and explanatory note* in the ledger is fetched by every signed-in document, and the notes —
+prose nothing renders — were 2.9 KB of that. They now live in `src/api/route-notes.ts`, which no screen imports,
+and the route measures **199.2 KB**. What makes that a fix rather than a trick is the pair holding it: the P08
+gate's c1 (extended here, with a new `c1_notes` canary) and `web/src/api/route-notes.test.ts` both fail if a note
+outlives its route or if a `note` field reappears on a `RouteDecl`. Coverage is deliberately *not* checked — the
+launch list in `docs/P08-frontend-shell.md` §4 already explains every unbuilt route. **The lesson for every later
+phase: the ledger is on the wire, so anything added to it is a byte a phone pays for.**
+
+**Numbers at this point.** Backend **911 tests OK** (62.2 s), `check-openapi` **431 passed / 0 failed** over 57
+paths, `tools/p11-gate-check.py` **16/16 with 10/10 scanners canaried** (c3 is the acceptance sentence walked over
+the API, c15 the standing a wallet reads back, c16 the comparison that must not echo an address), web **366 tests
+in 40 files** with `tsc` clean and the dictionary at **857 keys, 814 used**; `npm run build` renders 19 routes
+including `/leaderboard`, `npm run measure` passes at **199.2 KB worst route**, and `tools/p08-gate-check.py` is
+**15/15** — c4's money scan included, which is why the percentile, the best-trade share and the win rate all render
+through `bpsText` instead of `.toFixed`.
+
+**The `/snapshots` duplication D2 left behind is closed.** `_lb_history` claimed to be shared by `/snapshots` and
+`/rank` while `/snapshots` still folded the same rows inline; the route now calls the shared fold and keeps only
+what is specific to it (the pseudonym check and its freshness stamp). Two folds of one set of rows is how a
+sparkline and a badge end up disagreeing about the same wallet on the same screen.
+
+**The `.git` rewind recurred again (sixth time), in the spec repo.** Local HEAD sat at `d9688c2` (P05 era) with no
+remote configured, while GitHub's `main` was `87cdc8a` — and the working tree already held §16–§20, so nothing was
+lost by the recovery that worked before: token remote, `fetch`, `git branch backup-pre-reset-1`, `git reset
+--mixed origin/main`, then confirm the tree is byte-identical to the tip. **Standing rule, restated for the third
+time: read the remote tip before claiming drift; never `--hard`, never `checkout .`.**
+
+**Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
+7). Next: P11 D4–D7.
