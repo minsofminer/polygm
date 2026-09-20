@@ -892,3 +892,121 @@ with D6's migration rather than being smuggled into D5 after its record is writt
 7); every classification label has a visible rule and a disclaimer; nothing hides a loss. Next: P11 D6 — the
 public SSR pages (`/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>`) with OG tags, then D7's
 anti-gaming dashboard.
+
+## 24. P11 D6: the public pages — three crawler-visible surfaces, and the four bugs the sweep found underneath them (added 2026-09-21, nothing above deleted)
+
+D6 is built and green. The kit asked for three server-rendered shareable pages, a generated OG image per page,
+structured data "where it genuinely applies", and rate limiting plus abuse protection on public surfaces. All four
+shipped; the decisions below are the ones a later phase has to live with, and the second half of this section is the
+part that made the sweep worth running — four defects that no green test line would have shown.
+
+**Every page is rendered on the server, and the read path has no session in it at all.** A crawler runs no
+JavaScript, so a page that fetches its payload in the browser unfurls as an empty card and indexes as an empty
+document; `web/src/public/*` is therefore server-only by construction and the gate asserts it (a `"use client"` in
+any page or view module fails c23). The bug worth recording is *which* read path was used. The views first read
+through `serverRead` — the app's existing RSC read — and `serverRead` goes through the session proxy, which was
+written for pages that have a session: no access cookie means *refresh the token*, no refresh token means **401**.
+Every public page therefore answered 200 with an error state and `noindex` in the head **for every stranger**, which
+is precisely the audience these pages exist for. `web/src/api/public-read.ts` is the fix: same envelope, same stamp
+handling (a page must not disagree with the client about freshness), no cookie read, none written, no rotation
+attempted — a public page must not be able to log anybody out. c28, which fetches the pages from a real `next start`
+plus uvicorn pair with an empty cookie jar, is the check that found it; an in-process test could not, because the API
+answers these routes perfectly well.
+
+**The card is built from the payload the page renders, and its qualifiers are a priority list.** The same formatted
+numbers, not a second rounding, so a card cannot disagree with the page it came from. The footnote has an **order** —
+provisional first, then the drawdown, then at most the caller's own notes — because a share card is the artifact
+that gets screenshotted *without the page around it*, and the first implementation appended notes and then deleted
+whatever collided, which deleted "provisional" first. The bug was a priority, so the code is a priority list now.
+`PublicCard.provisional` exists so that "does this card owe its reader the provisional sentence" is a property of the
+card rather than an inference each consumer makes separately: the gate, the view and the alt text read the same flag,
+and the flag is `ageDays < 7`, the same test the `noindex` rule uses.
+
+**Structured data says only what the page shows, and the trail is the page's own.** A `BreadcrumbList` naming a
+section the page never prints is a claim the API cannot honestly make, because the web owns the copy and translates
+it. So the API names the trail **from its own payload** (`structured.unbacked()` enforces that every name is a string
+the payload carries) and each view hands `JsonLd` the trail it actually rendered, which **rewrites the graph's
+`BreadcrumbList` items** to it — the crawler then shows the same trail the reader sees, which is the only reason to
+emit one. The gate's c23 caught the first version ("Leaderboard" in the graph, "the boards" on the page), and the
+pre-existing graph is otherwise carried through untouched.
+
+**Indexability is one function with three answers.** A market is always indexable (its question is the search
+intent); a board is indexable only if it has rows (an empty ranking indexed under "most profitable trader" is a claim
+we did not make); a trader page is `noindex, follow` while the wallet is unranked or its record is younger than the
+provisional window, because a page that publishes a three-day streak as a track record is the thing the integrity
+rules exist to prevent. The answer travels in the payload and `generateMetadata` prints it, so there is no second
+opinion in a route file. The canonical origin is one constant (`PGM_PUBLIC_BASE`, default `https://openout.app`), so
+the sitemap, the canonical link and the card URL are identical by construction rather than by review.
+
+**Rate limiting on a page with no account is per kind, salted, and enforced by the same fixed window as the login
+lock.** Subjects are one-way digests (`i_…`), never an address, because one NAT exit is thousands of readers; limits
+are deliberately generous (600 traders/min, 1200 markets, 300 boards, 10 sitemaps, 3000 cards, 5000 across all
+kinds); a refusal is `429` with `Retry-After` and `X-RateLimit-*`, and the headers are served on the **allowed**
+path too, because a crawler that can see its budget slows down and one that cannot discovers the limit by hitting it.
+Coming straight back ten times past a limit writes an **auto-block** — that is the difference between a limit and a
+defence. Blocks are scoped (`all` or one kind), expiring (1–168 h), written and lifted by an operator token, and
+stored with the digest, the scope, the reason and `created_by`. c24 walks the whole sequence, including that lifting
+the block restores 200 on every public page.
+
+**One URL grammar, written in four places, checked as four.** The contract, the web route ledger, `urls.py` and the
+sitemap all describe the same paths, and c26 reads all four and fails when they disagree — the failure it is looking
+for is a page that exists at one URL and is published as canonical at another, which halves its signal and doubles
+its cache. The OG route is the page URL plus `/opengraph-image`, always: an unfurler's cache key is the URL, so a
+second convention is a second card. Cards `revalidate = 86_400` and take their palette from `styles/og-colors.json`,
+generated by the same token script the app uses, so a card cannot drift from the brand a reader just left; the layout
+renders payload strings and does no arithmetic.
+
+**Four defects the sweep found, none of which a green suite was going to show.** (1) **One SQLite connection across
+uvicorn's threads** was a one-in-five 500 on a plain `SELECT /v1/markets` (`sqlite3.InterfaceError`), found by P08's
+c11 drill failing twice in four runs and only after the drill was changed to capture the response body instead of
+just the status. `check_same_thread=False` had only silenced the warning. The fix is the shape a real database forces
+anyway: a connection per thread, WAL with `busy_timeout=5000`, reaping for dead threads (three file descriptors
+each, and the suite hit `Too many open files` before the reap existed), and test-installed configuration carried to
+every connection rather than the caller's. (2) **The database path must be bound at import**, not read per
+connection: a process that imports the app against a throwaway database and then changes `PGM_DB_PATH` was handing
+its request threads a path that did not exist, and `sqlite3.connect` cheerfully **creates an empty database** rather
+than failing — the answers were `no such table: markets` 500s. (3) **The same family, in the contract audit**: it
+removed its throwaway database *immediately after `import app`*. That was invisible for as long as the app held one
+shared connection open — POSIX keeps an unlinked inode alive for an open handle — and became seven failing live
+probes the day connections went per-thread. A cleanup that only works while the thing it cleans is still open is not
+a cleanup. The removal moved to the end of the function. (4) **The web suite's P08 flake was a test race, not a slow
+box**: `getAllByRole("checkbox")` immediately after an awaited button, against a mock that resolves a tick later,
+failing about two runs in three once the suite reached 48 files. Raising timeouts would have made it pass and left
+the race in place; `findAllByRole` is the fix, checked by three consecutive full runs.
+
+**An append-only promise needs both halves, and seventeen tables only had one.** `0005_triggers.sql` both creates the
+`polygm_reject_mutation()` triggers and revokes `UPDATE`/`DELETE` from `PUBLIC` and `polygm_app` in a `DO` block —
+and that block can only name tables that already exist, so every append-only table added after 0005 had to write its
+own grant and none of them did: the auth trail, the wash findings, the copy engine's would-be actions, the drill
+records, the leaderboard exclusions and the referral accruals were append-only by trigger and writable by the
+application role. The mirror gap was there too: `leaderboard_exclusions` had been in the portable `APPEND_ONLY` list
+since D1 with no Postgres trigger at all. `0018_append_only_grants.sql` closes both halves for the declared set, and
+c27 re-derives them on every run — the declared list is parsed **out of `build-sqlite-migrations.py` with `ast`**,
+because scanning for `CREATE TRIGGER` cannot tell a live trigger from one `0012` left behind on a table `0016`
+dropped (and `referral_events` is exactly that).
+
+**Numbers at this point.** Backend **1021 tests OK** (87.3 s, no skips — the D5 count was 990; D6 adds
+`test_public_pages.py` 19 and `test_public_pages_api.py` 12); `check-openapi` **535/0** (69 paths, 106 schemas, 5 new
+public paths carrying 6 operations, 9 new schemas, `RateLimited`/`RATE_LIMITED`); `tools/p11-gate-check.py` **28/28
+with 18/18 scanners canaried** (23.1 s; c23–c28 walk the public surfaces, the budget and block sequence, the
+address-free payloads, the once-published URLs, the append-only halves and the stranger's request), `p08` **16/16**,
+`p09` **7/7**, `p10` **15/15**, all re-recorded on the D6 tree; web **424 tests in 48 files**, `tsc` clean,
+`i18n:check` ok (962 keys, 909 used), `npm run measure` passing at **199.9 KB** worst route with route-level
+splitting proven, `npm run measure:tape` passing at the same 16.7 ms budget, and `tools/build-sqlite-migrations.py
+--check` clean at **17 files / 116 tables / 27 append-only** with 51 PG-only drops recorded in `DROPPED.json`.
+
+**Open, carried forward.** The `0018` SQL is read, not run — this environment has no Postgres — so the first
+Postgres deploy must confirm the grant list applies; it is `pg_roles`- and `to_regclass`-guarded, so it is safe on a
+database that has not applied every earlier migration. The canonical origin is a knob (`PGM_PUBLIC_BASE`) whose
+production value is set at deploy; the public budget's subject is the client address **as this process sees it**,
+which behind a load balancer is the balancer unless `X-Forwarded-For` is trusted — the limits are generous enough
+that a mis-set subject degrades politely, but the auto-block's blast radius depends on it, so it is a launch item.
+One connection per thread cost the suite 4.3 s (83.0 → 87.3); the alternative (one connection behind one lock)
+serialises every request and is worse under the load this exists for, and the shape to reach for if it becomes a
+problem is a small pool with a lease, not a shared handle.
+
+**Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
+7); every classification label has a visible rule and a disclaimer; every win rate sits behind a sample gate; nothing
+hides a loss. Next: **P11 D7 — the anti-gaming dashboard** (wallets climbing suspiciously fast, clusters of
+correlated wallets, synthetic referral chains, wallets whose volume hits our builder code unusually, with one-click
+exclude-from-rankings and flag-for-review), which is the last deliverable of the phase.
