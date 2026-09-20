@@ -780,3 +780,115 @@ the design system's existing sticky rung rather than a literal (P08 c5).
 7); the ledger in `web/src/api/routes.ts` is on the wire, so anything added to it is a byte every phone pays for.
 Next: P11 D5 — referrals (reward on the referee's first matched order over a notional threshold, dedupe, clawback,
 hard self-referral block).
+
+## 23. P11 D5: referrals — what a referral is worth, and the four ways it is stopped (added 2026-09-20, nothing above deleted)
+
+D5 is built and green (uncommitted at the time of writing; it lands as the D5 close commit). The kit asked for a
+referral link and a short code, **one** reward model chosen and justified, Sybil defences, a repeal path, a
+dashboard, payout terms, and an argument about a referrer leaderboard. The two decisions below are the ones a later
+phase has to live with.
+
+**The reward is a share of the builder fee we are actually paid — not a bounty, not a deposit reward, not Pro
+credit.** `SHARE_BPS` (25%) of `fee_micro_observed` on the referee's own attributable fills, for a year
+(`TERM_DAYS`) from the referee's qualifying order. The property that decided it is that **the model has no fixed
+cost, so a farm has no equilibrium**: a flat bounty pays the moment a stranger crosses a threshold, and
+manufacturing a stranger — one small matched order — can cost less than the bounty, whereas earning $X from a fee
+share requires causing about $4X of real builder fees to be paid to us out of the attacker's own money. *The
+attacker is the customer.* Deposits are invisible to it, which matters because the kit names deposit-size rewards
+as its trap ("deposit, withdraw, and never trade … it looks like a pyramid"), and nothing is ever paid for
+recruiting — no second level, so "recruit recruiters" has no payout behind it. The two honest costs are recorded
+with the model: the liability has a **tail** (hence the 30-day settle hold, the $20 minimum and the $2,000
+referrer-month review) and it **pays slowly at the bottom** (one small trader earns cents in month one, which is
+the point — the dashboard names the amount still to go instead of hiding it behind a pending that never clears).
+The two rejected models are answered **in the served artefact**, `terms.rejected_models`, not only in the phase
+document: an argument that lives only in a doc stops being made the day somebody changes the code.
+
+**The qualifying event is a matched order, and the term runs from it — not from signup.** `terms.qualifies()`
+refuses an unfilled order (a share of zero is zero), refuses a self-crossing order *structurally* rather than by
+threshold (a "ignore round trips under $1" rule is a rate card for wash trading), inherits the market exclusions
+the integrity rules already applied, and requires `$25` notional. Signup is free and unbounded; the schema
+enforces `qualify_ms >= signed_up_ms`, which is what caught the gate's own fixture stamping the qualifying order a
+millisecond *before* the signup it was supposed to follow.
+
+**Two arithmetic rules that decide whether the number is real.** *Earned is observed, never expected*: accrual
+reads `fee_micro_observed`, so when the venue settled $8 against our $40 estimate the referral is paid 25% of
+$8 — the gate's c19 prints exactly that, and an accrual on expected fees is money leaving the door the first
+month the venue charges less than we assumed. *`toMinimumMicro` is the gap from the **payable** balance*: $10
+accrued but still inside the 30-day hold means $20 to go, not $10, because money that cannot be paid this cycle
+does not count toward a payout minimum. The engine was right and the first test was wrong; the published rule is
+"carried forward, never forfeited".
+
+**The Sybil rules are an order, not a bag, and refusal is not review.** `sybil.PRECEDENCE = self_referral →
+duplicate_funding → shared_device_or_ip → velocity`; the first rule that fires decides, so a self-referral is
+never quietly downgraded to a device collision. `duplicate_funding` is a **refusal** — multiple wallets funded
+from one source are one person, and a refusal means no fee will ever accrue — while `shared_device_or_ip` and
+velocity (5/hour, 25/day) are **reviews**: held for a person, nothing accrues while it clears, nothing is
+forfeited. Collapsing the two would either refuse honest referees who share a laptop or let a farm keep accruing
+through a weeks-long queue. Signals are stored only as salted digests (`d_…`/`i_…`/`f_…`, never an IP, a user
+agent or a funding address), a salt under 16 characters is refused, and a click row carries no user at all — the
+attribution is the only place a person and a link are joined. What none of this catches is an attacker who
+manufactures distinct devices, distinct funding sources and real fees paid: they are the customer the model was
+built for.
+
+**A self-referral is a revenue-integrity matter, and the builder code is the ground.** The apply route refuses the
+attribution (409 `SELF_REFERRAL`) **and** disables the builder code with the reason in its note — the kit's
+argument is that the builder-fee share is a revenue line and an account paying itself is taking it. The scoping
+was forced by a bug in the first implementation: the app revoked the code for *any* refusal, but one code is
+shared by all of a referrer's referrals, so a blanket revocation on a duplicate-funding clawback would have killed
+attribution for every legitimate referee that referrer ever brought. The rule is now `kind == "self_referral"` and
+nothing else: a funding collision costs the accruals, never the code.
+
+**A clawback reverses money and keeps the history.** Unpaid accruals are cancelled first, what was already paid is
+reported with `requiresRepayment`, anything under $5 is written off (a *published* rule, so a reversal is never a
+surprise), and the accrual rows are not deleted — they are append-only, and the reversal is a state plus a record.
+The dashboard zeroes the earned cell for a clawed-back referee rather than showing money that has been reversed.
+
+**The funnel is the money chain; clicks are not a ceiling on it.** `FUNNEL = signups → funded → trading → earned`
+is asserted monotone (`funnel_findings`), because each number comes from a different table and a join that counts a
+row twice shows up as an impossible funnel rather than as a plausible figure nobody re-derives. `LEADING =
+clicks` is checked only for what a counter can be wrong about alone; "clicks ≥ signups" is a requirement with a
+wrong answer (one person can click five times, and a token can be forwarded), so the web panel renders the leading
+row **apart** from the chain rather than quietly treating an honest non-monotonicity as a bug or dropping the row.
+
+**No public referrer leaderboard, and the reason is served.** `GET /v1/referrals/terms` (public, no session)
+answers it: "a public contest over recruitment is a spam contest with a scoreboard, and the ranking it would print
+is a ranking of recruiting, not of trading." The gate asserts the route's absence, because the way that argument
+loses is not somebody disagreeing with it — it is somebody adding the route in a later phase and leaving the
+sentence behind.
+
+**Web.** `web/src/terminal/referrals.ts` (pure) + `ReferralsView.tsx` on `/referrals`, rendering the seven rules,
+the per-state sentences and the funnel **from the API**. The panel's only local strings are labels, and they are
+literal `t()` calls in `Record<EarningsKey, string>`/`Record<PayoutKey, string>` over unions declared in the pure
+module — because `scripts/i18n-check.mjs` refuses interpolated keys by design, and the fix is to make a new bucket
+without a label a **compile error** rather than to silence the checker. The claim re-reads `/me` instead of
+trusting the POST's echo, and exactly one POST carries one well-formed idempotency key.
+
+**Two build-time lessons worth carrying.** (1) The referral plane's `0016_referrals.sql` **drops** P04's
+never-written `referrals`/`referral_events`: `share_bps` was a per-code negotiated rate, which is exactly the
+thing the model's arithmetic cannot survive (an account manager can raise it), and `referral_events` could not
+answer "who is owed what, and is this referral still inside its year". A second referral schema beside the real
+one is the two-authorities-over-one-number failure this project keeps writing gates about. (2) **A green test line
+is not evidence when the HTTP layer is missing**: `python3 -m unittest discover -s tests` prints `OK` with the API
+tests *skipped* on a machine where `fastapi` is absent, and this environment reinstals dependencies per session —
+the D5 sweep read `Ran 990 tests … OK` that had skips in it, on a run where the gates were simultaneously failing
+with `ModuleNotFoundError`. Read the skip count, not just the word OK.
+
+**Numbers at this point.** Backend **990 tests OK** (83.0 s, no skips: `test_referrals.py` 37, `test_referrals_api.py`
+26, `test_leaderboard_api.py` 65, `test_migrations.py` 18); `check-openapi` **498/0** (64 paths, 97 schemas, 7 new
+referral operations, 9 new schemas, 4 new error codes); `tools/p11-gate-check.py` **22/22 with 16/16 scanners
+canaried** (17.3 s; c19–c22 walk the reward model, the second wallet, the dashboard arithmetic and the payout
+reality), `tools/p08-gate-check.py` **16/16**, `tools/p09-gate-check.py` **7/7**, `tools/p10-gate-check.py`
+**15/15** — all four re-recorded on the D5 tree, because P08's c2/c7/c8/c15 read the contract, the built output,
+the bundle artefact and the web suite; web **397 tests in 44 files** with `tsc` clean and `i18n-check` ok (919
+keys, 876 used), `npm run measure` passing at **199.3 KB** worst route, `npm run measure:tape` passing at 1.78 ms
+per second of load against the 16.7 ms frame, and `tools/build-sqlite-migrations.py --check` clean at **113
+tables / 54 triggers / 16 files** with 48 PG-only drops recorded in `DROPPED.json`.
+
+**Open, carried forward.** The `REVOKE`/grant block in `0005_triggers.sql` does not yet name `referral_accruals`,
+so the append-only guard on the new ledger is the trigger and not the grant; it is a two-array edit and it lands
+with D6's migration rather than being smuggled into D5 after its record is written.
+
+**Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
+7); every classification label has a visible rule and a disclaimer; nothing hides a loss. Next: P11 D6 — the
+public SSR pages (`/trader/<handle>`, `/market/<slug>`, `/leaderboard/<board>`) with OG tags, then D7's
+anti-gaming dashboard.
