@@ -1010,3 +1010,89 @@ problem is a small pool with a lease, not a shared handle.
 hides a loss. Next: **P11 D7 — the anti-gaming dashboard** (wallets climbing suspiciously fast, clusters of
 correlated wallets, synthetic referral chains, wallets whose volume hits our builder code unusually, with one-click
 exclude-from-rankings and flag-for-review), which is the last deliverable of the phase.
+
+## 25. P11 complete — D7, the anti-gaming dashboard: four questions about our own tape, and the two buttons whose only effect is a row (added 2026-09-21, nothing above deleted)
+
+D7 was the last deliverable of the phase, and it is deliberately the smallest surface in it: one internal screen, two
+routes, four detectors and no new table. `leaderboard_exclusions` has been append-only since D1 and the boards have
+replayed the newest row per (wallet, board) at read time since D2, so D7's whole job was to produce *findings* worth
+a human's attention and to turn a click into one more row. Both are now checked end to end, and the phase's two
+acceptance sentences are answered by the gate: c11/c14 print why a wallet at rank 47 with fewer resolved markets sits
+above rank 12 (the board ranks risk-adjusted PnL, not market count, and the row carries the comparison it was ranked
+on), and c20/c29/c30 catch a second wallet funded by the first.
+
+**A detector proposes; a human records.** `packages/polygm_core/gaming/detect.py` is pure — it takes rows and returns
+findings carrying the shape, the numbers it was measured from and a `suggested` action that is a word rather than an
+act. Nothing in the package writes. The only write in D7 is a human's click, landing as an append-only
+`leaderboard_exclusions` row with the action, the reason, the actor and the kind of finding that prompted it. That
+split is the reason a wrong decision costs one more click instead of somebody's standing, and the gate's c30 proves
+it against the served routes: a flag leaves the ranking untouched, an exclude removes the wallet from the public
+read, an include restores it, and a retried click replays the stored answer rather than appending a duplicate that
+every replay-based consumer would read as a later decision.
+
+**The rule and the innocent reading are one served object.** `RULES[kind]` and `INNOCENT[kind]` are data
+(`gaming/rules.py`), and the API serves them as a pair per kind, so a consumer cannot render the damning reading
+without the other one in hand. That is the product's standing constraint — every classification label carries a
+visible rule **and** a disclaimer — made structural rather than editorial, and it is the one design choice here that
+would be hard to retrofit: a dashboard that only ever shows the incriminating half is a dashboard that gets acted on
+before it is read. The four rules, and what each looks like when nothing is wrong:
+
+* **Fast climbers** — at least 25 places inside seven days, and either three times the board's own median climb or at
+  or above its 99th percentile. The percentile alone was a **dead rule**, which the pure tests caught: in a
+  population of forty-one climbers the single largest climb sits at 9756 bps, so a 9900-bps bar can never be reached
+  by anybody. A threshold no specimen can satisfy is not a strict rule. Thinness (a settled count below the median of
+  the wallets climbed past) decides severity, not whether to list, because a lucky three weeks and a manufactured
+  record look identical from here — which is exactly why a person looks.
+* **Correlated clusters** — 8+ of the smaller tape's fills on the same token and side within 60 seconds, at 60% of
+  that smaller tape, unioned transitively so a farm of six arrives as one cluster. This one shipped a real bug into
+  the gate's own run: the overlap was `|hit[a] ∩ fills(b)| / min(|a|,|b|)`, which counts the *larger* wallet's fills
+  against the *smaller* wallet's count and printed `worstOverlapBps: 10034` — a ratio of 100.34% beside a 60%
+  threshold, the kind of number that gets the threshold raised instead of the bug fixed. Counting the smaller
+  wallet's own fills that have a counterpart cannot exceed 100% by construction.
+* **Synthetic referral chains** — one referrer with 3+ referees, plus a shared funding/device digest, or two
+  qualifying inside 48 hours of signup, or two at the $25 floor. D5 refuses a *self*-referral at apply time; a
+  referrer whose referees collide **with each other** is the same fact from the other end and is invisible to a
+  pairwise check, which is why it needs a screen. Digests are compared as one-way values, counted, never printed.
+* **Builder-code anomalies** — $25+ of attributed volume with either five distinct markets inside ten minutes, or
+  half the attributed orders never observed a fee. The volume base is `builder_attribution_terms.notional_micro`, not
+  the fee, because a fee-based floor would silently exempt a low-rate code — the one code a farm would pick.
+
+**This is the only P11 surface that may name a wallet, and it names two.** The public boards pseudonymise before they
+rank, and that is right for a reader and useless for a reviewer: the exclusion table is keyed by the wallet the tape
+names, so every finding carries the raw wallet (ADMIN-only, never in a public payload) *and* the `w_…` the page would
+show — while the audit row for a decision carries the pseudonym, because the trail outlives the investigation and an
+address in a ticket is an address in a support tool. The gate greps the payload for any address-shaped string no
+finding is about.
+
+**Two more defects the build found, both by writing the test first.** The route **was unstamped**: the client refuses
+a read without `asOf`/`staleAfter` (`UNSTAMPED_READ`), so the new screen rendered "the tape was not read" on a 200
+response. The route now stamps with `ttl_ms=0` (a cached suspicion list is yesterday's farms with today's clock on
+it) and `asOf` set to the newest snapshot the climb rule actually read. And the cluster finding's `size` field
+tripped the contract's own rule that prices and sizes are strings, never JSON numbers — renamed `walletCount` /
+`refereeCount` rather than exempted, because an exemption is how the next one gets missed. A third, smaller one came
+from the gate rather than the suite: the check for "a decision without an Idempotency-Key is refused" first failed
+naming a rule it was not testing, because it sent a 6-character reason and the house order is body shape → semantics
+→ key shape (`_check_body` → `reason` → `_idem_shape`). The check's fixture was wrong, not the route.
+
+**Numbers at this point.** Backend **1055 tests OK** (105.5 s, no skips: D7 adds 22 + 12); `check-openapi` **549/0**
+(71 paths, 112 schemas, the two admin operations mapped so the checker cannot skip them); `tools/p11-gate-check.py`
+**30/30 with 20/20 scanners canaried** (22.4 s), `p08` **16/16**, `p09` **7/7**, `p10` **15/15** — all four
+re-recorded on the D7 tree, because P08's c2/c5/c7/c8/c15 read the contract, the stylesheet, the built output, the
+bundle artefact and the web suite; web **435 tests in 50 files**, `tsc` clean, `i18n:check` ok (995 keys, 940 used)
+now across **four** route families (`terminal`, `public`, `admin`), `npm run measure` passing with the money module
+absent from the landing document, and `measure:tape` inside the 16.7 ms frame. Two fresh gates fired on D7's own
+code and both were right: P08's c5 refused four unit literals in the new CSS block (`width: 20rem`, `1px`, `4px` —
+now `--pgm-border-w-hair`/`--pgm-border-w-heavy`, with `min-width: 0`), and the route-notes test refused two notes
+over its 160-character limit, which is the limit doing its job.
+
+**What D7 deliberately does not do, recorded rather than implied.** The dashboard has no SSO, no role model and no
+second factor: it is the same `_admin` token gate every admin route in this codebase has used since P04, held in the
+tab's memory and never written to storage, and a real deployment should front it with the operator identity provider
+(the audit trail already records an actor and a reason per decision, which makes that change additive). And `flag`
+is a question nothing consumes yet — recorded, shown as reviewed, reversible — with the `finding` field on every row
+existing precisely so that "how many flags became exclusions" becomes a query rather than a schema change.
+
+**Standing, unchanged:** phases run strictly `P01 → P16`; no real funds move until P13 and P14 are green (kit rule
+7); every classification label has a visible rule and a disclaimer; every win rate sits behind a sample gate; nothing
+hides a loss. **P11 is complete**: D1–D7 built and gated, with the phase's own acceptance sentences walked by the
+gate rather than asserted in prose. Next: **P12** — read from `prompts/P12*.md` in the kit.
