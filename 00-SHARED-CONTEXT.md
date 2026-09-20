@@ -1096,3 +1096,75 @@ existing precisely so that "how many flags became exclusions" becomes a query ra
 7); every classification label has a visible rule and a disclaimer; every win rate sits behind a sample gate; nothing
 hides a loss. **P11 is complete**: D1–D7 built and gated, with the phase's own acceptance sentences walked by the
 gate rather than asserted in prose. Next: **P12** — read from `prompts/P12*.md` in the kit.
+
+## 26. P12 (Telegram: the bot, the channel, the Mini App): two surfaces that disagreed about a link, and the deployment that proves the rest (added 2026-09-21, nothing above deleted)
+
+P12 adds a second front door — a chat where a person places an order and a public channel anyone can watch — and it
+found its most expensive bug in the seam *between* two phases, not inside one. Everything below is a conclusion the
+next phase should be able to act on without re-deriving it.
+
+**A payload grammar two languages disagreed about, and no test that crossed the boundary.** The bot mints
+`t.me/<bot>/<app>?startapp=<payload>` in Python (`telegrambot/channel.py`); the Mini App parses it in TypeScript
+(`web/src/telegram/startapp.ts`). Python emitted a bare slug, TypeScript expected `<tag>:<value>`, and from P08 to P12
+every trade button on every channel alert opened the Mini App on nothing. Both suites were green because each side was
+internally consistent. Three more faults sat under it: a colon is not a character Telegram's `startapp` value is
+documented to carry (it is a short URL-safe token); the market target was `/markets/<id>` — the list route with a stray
+segment, a 404 no test had walked to; and the Mini App printed `payload.reason` (`bad-characters`) to the user, which is
+a machine token where the product promises a sentence.
+
+Therefore: **a value that crosses a language boundary is defined once, in a file, and each side is tested against that
+file rather than against its own idea of it.** `contracts/startapp.json` holds the grammar (literal character set, the
+separator, the tag table, the length caps). Python reads it at import; TypeScript reads a generated mirror that
+`pretest` verifies exactly as the design tokens are verified. `tools/p12-gate-check.py` is the crossing: it mints links
+with the real Python function, runs the *real* TypeScript parser over them in node, and asserts the parser resolved the
+market the link named — with canaries that the old shapes are refused. It also caught the next bug in the same family:
+the first draft wrote the charset in regex notation, which TypeScript read as a class (right) and Python read as a list
+of literal characters (also defensible) — so `fed-cut-sept` filtered to `--` and every alert would have opened an empty
+market. **One representation, unambiguous in both languages, or two implementations that agree by accident.**
+
+**A route that existed twice in one file.** `POST /v1/telegram/order` was defined twice in `services/api/app.py` — the
+route, its response table and its authz row, appended a second time in an earlier window. FastAPI registered both; the
+only visible symptom was the contract checker reporting a duplicate key. The surviving copy is the stricter one (it
+validates slug and side and returns `outcome`); the other was the older, thinner variant. When two copies of a handler
+differ, the *file* has no opinion about which one runs: the first registration does, and nothing in review shows it.
+
+**The web ticket was a 422 on every attempt.** `src/screens/TradeTicket.tsx` posted `{market_id, side, amount_cents}`
+to `/v1/orders`, which requires `{marketId, tokenId, side, price, size}`. Nothing caught it because the ticket was
+rendered in two screens and had no test of its own; both screens tested their own thing. The lesson is not "add a test"
+but "a component that talks to the wire needs a test that asserts the wire": the new `TradeTicket.test.tsx` asserts the
+route key, the body, the idempotency seed, and that *nothing* is sent when there is no market or the amount is
+unparseable. The fix itself is structural, and it is the rule the surfaces should keep: **a client names what it is
+looking at and the server prices it.** A browser cannot honestly name a CLOB token id, and a price it read a few
+seconds ago is the past, so `POST /v1/orders/amount` (new, declared, `x-auth: user`) takes a slug, a side and an amount
+and calls the same conversion the chat's confirm tap calls — `_order_from_card`, renamed from `_tg_order_from_card`
+because it stopped being Telegram's the moment a second surface needed it. One conversion, one risk gate, one ledger,
+three surfaces; 50 USDC on a 0.62 ask is 80,645,161 micro-shares from any of them.
+
+**Deployments: three projects, and a backend that is the real thing on an ephemeral disk.** The Mini App
+(`polygm-mini-app`) and the API (`polygm-api`) are separate Vercel projects: the front end can be rolled back without
+touching the backend, and `PGM_SURFACE=miniapp` decides what the front end *is* — a flag read by the middleware, the
+root page, the frame-ancestors and the robots meta, never inlined into a client bundle
+(`surface.server.ts` is server-only by name). Off-surface paths answer **404 with a sentence**, not a redirect: a
+redirect would make the bot's URL a doorway to the main site and create the second indexable copy the split exists to
+avoid. Two noindex signals, both scoped to the surface — a noindex header in `web/vercel.json` would de-index the *main
+site*, which is a P08 D1 promise.
+
+`api/index.py` runs the repo's own migration ledger and seed into `/tmp` on a cold start and then exports the same ASGI
+application everything else runs — no demo-shaped subset, every route and refusal code intact. Its honest limit is
+written in the file: the filesystem is per-instance and ephemeral, so **fixtures are stable and records are
+disposable**; Postgres remains the production path and SQLite its dev stand-in, exactly as P04 said. And the deployment
+has one deliberately unfilled secret: `PGM_TELEGRAM_BOT_TOKEN`. Everything that mints a session refuses without it
+(`SECURITY_ENV_MISSING`, 503). A *placeholder* token would be worse than none — every real Mini App launch would answer
+"invalid initData", which reads as a bug in the Mini App rather than an unconfigured backend.
+
+**Refusals are sentences, and the code belongs in the toast.** The refusal vocabulary was rewritten in this phase onto
+the real `CODES` keys on both sides (the old `RISK_*` table had no key that any real refusal produces, so every refusal
+fell through to one sentence about a code). The same rule then had to be applied to the surfaces: the web ticket was
+rendering `CODE: message` inline, and the Mini App was rendering a parse reason. Both now show the sentence, and the
+code travels to the toast where an operator or support can read it. `tools/p12-gate-check.py` asserts the two tables
+have the same keys and that every key is registered, with the `RISK_*` names as the canary.
+
+**What only the owner can do.** Two manual steps remain, and neither has an API: (1) set `PGM_TELEGRAM_BOT_TOKEN` on
+the `polygm-api` project; (2) in BotFather, set the Mini App URL to `https://polygm-mini-app.vercel.app/` with short
+name `trade` — the code's deep links are `t.me/<bot>/trade?startapp=<slug>`. Recorded here so the next phase does not
+rediscover them as "the Mini App is broken".
