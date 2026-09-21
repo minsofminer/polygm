@@ -1168,3 +1168,62 @@ have the same keys and that every key is registered, with the `RISK_*` names as 
 the `polygm-api` project; (2) in BotFather, set the Mini App URL to `https://polygm-mini-app.vercel.app/` with short
 name `trade` — the code's deep links are `t.me/<bot>/trade?startapp=<slug>`. Recorded here so the next phase does not
 rediscover them as "the Mini App is broken".
+
+
+## 27. P12 D6 (the wallet over Telegram): the ceremony inside the key, a reference encoder that was wrong, and values that lived in generated files (added 2026-09-21, nothing above deleted)
+
+D6 is the half of the phase where the money leaves: a deposit address with a QR, a bridge's progress, a withdrawal
+against an allowlist, and a key export. Four conclusions the next phase should not have to re-derive.
+
+**A retry on a money route must be answered before anything is consumed.** The withdrawal ceremony is a ladder —
+allowlist → 24-hour destination cooldown → balance → typed amount → typed address → password → authenticator — and
+`_totp_gate` *consumes* an accepted code. The first version took the locks before consulting the idempotency key, so a
+client whose withdrawal succeeded but whose response was lost retried with the same key and was answered
+`TOTP_INVALID`: the user told to wait 30 seconds for a withdrawal that had already been sent. **The whole ceremony now
+runs inside `_idem_run`'s `work()`**, which means a replay is served from the stored body before the code can be
+consumed, and a *different* body under the same key is a 409 rather than a second withdrawal. The general rule: on a
+route with a consumable factor (a TOTP step, a nonce, a one-shot token), the idempotency check comes first or the retry
+path is a lie.
+
+**Three smaller refusals that were each the difference between a sentence and a code.** `INSUFFICIENT_BALANCE` could not
+say the one useful thing — "available 10.000000 USDC" is *our* ledger's number and nothing from the request — so it
+joined `_PUBLIC_DETAIL_CODES`; a refusal whose detail is derived from request data stays out. Reserved cash was summed
+over the terminal's open states rather than the executor's (`pending|queued|submitting|uncertain|submitted`), and
+`uncertain` is exactly the state that must stay reserved: money a user can see and cannot spend ends in a support
+conversation. And `destAddress` on the withdraw body was rejected as an unknown field, which told a client that sent a
+raw address nothing; it is now accepted *so that it can be refused* by name (`ADDRESS_NOT_ALLOWED`).
+
+**A reference implementation can be the wrong one, and "it looks plausible" is not a check.** The deposit QR is
+generated in this repo (`web/src/tma/qr.ts`, no dependency, no fetch) and verified against fixtures built by `segno` —
+cell by cell, in the phase gate, because a QR that is wrong by one module scans fine in a browser and fails on a cheap
+camera. The first comparison failed and the bug was in the *reference*: `segno.encoder.write_padding_bits` appends
+`8 - (length % 8)` zero bits, i.e. a whole `0x00` codeword when the stream is already byte-aligned, where ISO/IEC 18004
+§7.4.10 pads only as far as the boundary. The spurious codeword shifted every later one and changed the mask `segno`
+chose. The generator now patches that function, cross-checks every stream against Python `qrcode`'s `create_data`, and
+reads every matrix back with a spec-based reader. Reference encoders legitimately disagree on mask (`qrcode` picks 3
+for the address fixture, `segno` and we pick 2 — both legal), so a fixture records the mask and version it chose rather
+than pretending there is one answer.
+
+**A value that belongs in a generator must not be typed into its output.** Running the phase's own gates found
+`brand/tokens.css` stale, and regenerating it *deleted* the Mini App's motion values and P09's three layout tokens
+(`--pgm-book-max-block`, `--pgm-rail-left`, `--pgm-rail-right`) — they had been hand-appended to the generated CSS, so
+the next `build-tokens` run removed them and the shell was left reading `var()` names no stylesheet declares (the P08
+c5 check said so). They now live in `tools/build-foundations.py` and are emitted by `tools/build-tokens.mjs`, which is
+the only place a token can be added and survive. The same shape produced a second finding: the Telegram bridge script
+was injected by two layouts, so its URL now exists in exactly one component (`app/tma/bridge.tsx`) because the gate's
+rule is "this URL appears nowhere else" — that rule is what keeps `initDataUnsafe` and `HapticFeedback` out of pages
+with no business calling them.
+
+**In a webview, the screen's own test is the cheapest place to find a ceremony bug.** Three were found that way and
+none by reading: the walk stepped over `CEREMONY` (which includes the `done` receipt entry) with `index + 1`, so the
+last tap rendered `Step 6 of 5 · Requested` and sent nothing; `send()` minted the idempotency key on the first press and
+returned, so the code step looked dead; and a refusal dropped the user at the start of a seven-step ceremony instead of
+on the rung that raised it (`stepForRefusal`). The Mini App's wallet is a **view on the same document**
+(`?view=wallet`), not a route, because the surface gate 404s everything that is not the root document and BotFather has
+to be registered with `/`.
+
+**What this machine cannot prove.** `next build` cannot complete here (2 vCPU, 1,984 MB, no swap; OOM-killed at
+`BUILD_EXIT=137` with either heap cap), so P08's c7/c8/c11 stay red locally — but Vercel builds the same commit in 20 s,
+which is the honest division of labour: the build is a deployment-side control, and the phone acceptance run in P12's
+quality gate is the owner's. The one thing the failed local run bought is a real bug (`@import` must precede every rule
+in `globals.css`, which the QR's new rules had violated).
