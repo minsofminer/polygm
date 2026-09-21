@@ -1170,6 +1170,74 @@ name `trade` — the code's deep links are `t.me/<bot>/trade?startapp=<slug>`. R
 rediscover them as "the Mini App is broken".
 
 
+## 28. P13 complete (the test strategy): a matrix that had to be taught to fail, a reconciler that booked a price we never agreed to, and a soak that ran for half an hour (added 2026-09-21, nothing above deleted)
+
+**What P13 is.** The kit's D1-D8 — architecture and budgets, the money-path matrix, contracts, frontend, load,
+property/fuzz, ten chaos drills, and CI gates — with one sentence as the objective: *the goal is not coverage
+percentage, it is that the specific ways this system can lose a user's money are all covered by a test that runs
+in CI.* `docs/P13-testing.md` is the deliverable; `tools/p13-gate-check.py` is the gate; `make p13` runs it.
+
+**The gate is 25 checks and every one of them has a canary.** P13's subject is the other gates, so it is built
+around how a test suite lies to itself, and each section is a pure function over its inputs that the gate feeds a
+deliberately broken input: a matrix row naming a test that does not exist; a pytest transcript where nothing ran;
+a run that skipped a third of the mapped tests; a green run whose warnings summary names a passing test (this one
+must be ACCEPTED — a canary in the other direction); a perturbed contract fixture; a chaos index with a FAIL in it
+and a drill whose expected outcome was never written; a 5-minute soak claiming to be the 30-minute clause; a
+workflow that runs nothing plus a quarantine entry with no expiry. `p13-gate-check: 25 passed, 0 failed`, recorded
+in `docs/verification/P13-gate.txt`.
+
+**Two false greens in the matrix itself, and neither was found by reading a verdict.** `--run` passed pytest the
+node ids without the `tests/` prefix: pytest answered `no tests ran in 0.00s`, the only failure signal was a regex
+over its own output, and the matrix reported **43 of 43 rows green in 0.3 s**. The fix then over-corrected — any
+node-id-shaped line read as a failure — and the warnings summary turned a passing test red. `summarise()` now
+demands a zero return code, a parseable summary, counts that add up to exactly the mapped tests, zero skips, and an
+empty failure set, and both false greens are replayed as canaries. What caught them was a runtime, not a verdict: a
+62-test matrix does not finish in 0.3 s.
+
+**The bug the matrix found in the product.** `Reconciler.sync_fills` booked every venue trade through `book_fill`
+and checked the price only for grid-exactness, so a BUY filled **above the order's own limit** was booked silently
+at the venue's price: the cost basis moved, the notification quoted a number the user never agreed to, and nothing
+anywhere said so. It is now refused, the ledger is untouched, and an `ambiguous_settlement` case names both
+prices — while price *improvement* (a limit is a bound, not an equality, and a matching engine fills at the
+maker's price) still books at the venue's better price, asserted separately so neither half can rot. Both
+directions were proven by reverting the fix and watching the test fail.
+
+**The soak clause, run for real.** 200 fills/s for 30 minutes: `P13-soak-1800s.{txt,json}` — **360,000 fills in
+1,800.0 s of wall clock**, zero duplicate deliveries, zero tape duplicates, 7,536 alerts delivered and 31,272
+suppressed by cooldown (the suppression path is under load too), consumer skew flat at −204 → −198 ms, RSS 26.1 →
+35.9 MB with **2.1 MB of second-half growth** against a 6 MB ceiling. The other full-size numbers: 2,000 books —
+11,955,200 deltas at 99,625/s with +7.8 MB; 500 concurrent users — p95 1,997 / p99 2,138 ms, 0 errors; 10,000
+subscribers — drained in 54.7 s against a 300 s SLO; 1,000 clients through a SIGKILL — back in 6.09 s, no slow
+failures while the server was down; 100 aggressive users — 30,000 calls demanded, 184 served, peaks
+`{data.trades 60, clob.book 62, gamma.markets 62}` per 10 s.
+
+**Three of the load findings were the harness, and saying so is the point.** The soak keyed its delivery queue on
+`(rule_id, dedupe_key)` while the product keys a signal on `UNIQUE (rule_id, dedupe_key, fired_bucket)`, so a
+rule legitimately re-firing in a later cooldown window reused a fanout idempotency key and the harness counted
+6,000 duplicates of its own making — the harness was the duplicate-alert bug that clause exists to catch. The
+storm's 1-second health probe timed out against a load the API was serving at p95 2.0 s and reported a restart
+that had already happened (3.6 s) as "the API did not come back". And an unpaced 30-minute soak finishes in 45 s,
+so `elapsed_s` is now recorded and the gate asserts it — a harness that reports its own arithmetic is worse than
+no harness.
+
+**The failures the drills produced, and what they were.** Ten drills, each with a written expected outcome above
+its observations (the kit's own constraint, mechanised: `EXPECT` in the suite, printed into the artifact, checked
+by the gate — a document that cannot be edited to fit the result). Drill 4 closes the store mid-flight and gets
+**503 `SERVICE_UNAVAILABLE` in 5,030 ms with `Retry-After`**, rows unchanged, and the same request succeeding
+after the release — that is exactly the shape of an outage a user can retry. Drill 3: 3,476 of 4,000 rows durable
+mid-write, replay to 4,000 distinct, no duplicates. Drill 6: our own `ORDER_RATE` budget was the "429 storm" until
+the drill was rewritten to distinguish venue throttling from our own. The headline loop stands at **100/100 kills
+between signing and the response: zero duplicate orders, zero lost positions, zero limbo**.
+
+**What this machine cannot prove.** Playwright's chromium downloads here and cannot launch (host libraries, uid
+1000, no root), so the three browser specs — buy flow with the request asserted at the wire and the ladder's
+geometry measured, the withdrawal ceremony, the Telegram webview — run in the nightly `e2e` job and the gate says
+"deferred" rather than a pass. There is no Redis and no Postgres in this deployment: drills 4 and 5 test the
+equivalent failure against SQLite's lock and the in-process cache, stated inside the drills. The kit's "nightly
+green for 3 consecutive days" release clause is a property of a CI account with history, so `release.yml` gates a
+tag on one full run of the same evidence instead, and says so. And no real funds: the $50 canary and the user
+phase still wait for P14 and owner action.
+
 ## 27. P12 D6 (the wallet over Telegram): the ceremony inside the key, a reference encoder that was wrong, and values that lived in generated files (added 2026-09-21, nothing above deleted)
 
 D6 is the half of the phase where the money leaves: a deposit address with a QR, a bridge's progress, a withdrawal
