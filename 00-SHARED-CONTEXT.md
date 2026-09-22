@@ -1295,3 +1295,94 @@ to be registered with `/`.
 which is the honest division of labour: the build is a deployment-side control, and the phone acceptance run in P12's
 quality gate is the owner's. The one thing the failed local run bought is a real bug (`@import` must precede every rule
 in `globals.css`, which the QR's new rules had violated).
+
+## 29. P14 complete (security testing): an unbreakable 500 on the refusal path, a rule that could never fire, and a probe suite that was wrong three times before it was right (added 2026-09-23, nothing above deleted)
+
+P14 is the phase that decides whether this product may hold real money, and it ends where the kit said it would: with
+a **written NO-GO**. Everything below is in `docs/P14-security-testing.md` (D1–D8), the six recorded artifacts in
+`docs/verification/P14-*`, and the generated `docs/P14-security-gate.md` — which is built *from* those artifacts and
+whose `--check` fails the moment the document stops matching them.
+
+**Six harnesses, because one tool per question is how a probe suite stays readable.** `p14-authz-matrix.py` (who may
+do what: 37/37 PASS, 95 operations served of 109 declared, drift 0), `p14-attack-surface.py` (what happens when an
+empowered account sends the wrong thing on purpose: **56 passed / 0 failed / 8 OPEN**), `p14-key-drills.py` (the six
+compromise drills, 15/0/1), `p14-appsec-scan.py` (SAST, all-history secrets, log redaction, deps, IaC, containers:
+36/0/1), `p14-infra-verify.py` (20/2/7 — the two failures are owner actions), `p14-abuse-probe.py` (18/0/1). `make
+security` is the whole phase; `.github/workflows/security.yml` runs the fast half on every PR.
+
+**The two findings that justify the phase, both on the money path, both invisible to a status code alone.**
+
+*F18 — the refusal path was not total.* `parse_usdc("0")` is a valid zero, so `"size": "0"` walked past the parser,
+reached the risk gate, was denied `ZERO_SIZE` — and then the *record* of that denial could not be written, because
+`order_intents` carries `CHECK (size_micro > 0)`. The user got `500 INTERNAL`, whose message is "retry with the same
+Idempotency-Key", and every retry re-derived the same denial and 500'd again: an unbreakable loop on the most obvious
+typo a client can make. The fix refuses the input before anything is recorded (the schema invariant stays — a
+zero-size row must never be storable), and the regression test goes further than the bug: a matrix of thirteen
+malformed money inputs, *none* of which may produce a 5xx or an `INTERNAL`.
+
+*F19 — a rule that could never fire, and a probe that had passed for the wrong reason.* An automation action of
+20,000 shares at $0.55 is $11,000 against a $2,500 per-order cap. It compiled, saved and dry-ran clean, and would have
+been refused `OVER_ORDER_CAP` on every single fire — an armed rule the user believes in and does not have, with the
+product silent at the one moment they could have acted. Two lessons, and the second is the one worth carrying: the
+first version of that probe posted a rule with **no targets**, the builder answered "a rule needs at least one market
+to watch", and the probe read *any* error as the cap firing. **A check that accepts any failure as its own success is
+not a check.** The fix is the ceiling the console already claimed its compiler enforced: `engine.validate_rule`
+refuses the action, and the number comes from `config.flags` at both save and fire time — an incident response that
+lowers the cap must bind every door into the venue, not just the hand-placed one.
+
+**The attack-surface tool was wrong three times before it was right, and each wrongness is a rule.**
+(1) The TOCTOU probe aged the book and then refreshed it inside its own submit, so it reported a stale-book order as
+accepted — **a harness that repairs the condition it is testing produces a green run about nothing.**
+(2) The SSRF probe guessed four URL-ish paths, got a 200 from an ignored query parameter, and called it a finding;
+then read the route list from the served OpenAPI document, which is 404 in the production shape, and reported "0
+parameters checked" as a pass — **a check over an empty set is a pass dressed up.** It now enumerates 87 declared
+paths and walks every `https://` literal assigned to a URL-ish name with an AST: 5 endpoint constants, all known
+vendors, 0 caller-supplied fetch targets.
+(3) The wash-trading probe asserted the wrong arithmetic (the washer subtracts the *smaller leg* of the pair, and
+keeps the genuine trade three hours later) — the product was right and the probe was wrong, which happens.
+
+**A detector can be honest, wired, and still not do what its docstring says.** The copy-farm rule ("the candidate has
+to lead") counts *any* candidate fill inside 120 s, unp aired. Three attempts at a negative control all flagged: with
+the other wallet moved 200 s earlier — so in no pairing sense is it being followed — 10 of 12 fills still matched,
+because a 60 s cadence always has a fill inside the window. The row that produces is a public suspicion ("derived from
+0x…"), which is a claim about a person, so it is recorded as OPEN with the fix named (pair the fills one-to-one, or
+compare cadences) and the tape kept in the tool as its test. Likewise the broadcast's Markdown-confetti warning fires
+on any market question containing `_` or `[`: cosmetic, but a warning that fires on ordinary questions is a warning
+operators learn to skip, which is how the real confetti gets through later.
+
+**Authorisation held, and it held for the reason the kit wanted: because it was attacked.** No cross-user read, no
+cross-user write, no anonymous 2xx, no IDOR that leaked, no user→admin escalation, no admin path around the risk gate
+(14 admin operations, none on the order path; an over-cap order refused for the limit reason). Two of the kit's
+scenarios have **no surface yet** and are recorded rather than papered over: `POST /v1/orders/{intentId}/cancel` is
+declared in the registry and served by nothing (the probe is route-driven, so the day it ships it is covered), and no
+HTTP route accepts a service credential.
+
+**The live deployment was the finding nobody can argue with.** *F9:* `polygm-api.vercel.app` accepted a spoofed
+`X-User-Id` and served its whole OpenAPI schema — because the security-plane env was missing on the Vercel project,
+which put the app in the *development* identity shape in production. Fixed by generating those secrets and setting
+them on the project for all three targets, then redeploying the current source; re-verified live with curl (401
+`UNAUTHENTICATED` on spoofed identity on three routes, 404 on `/docs`, `/redoc`, `/openapi.json`, 401 on anonymous
+order). The general rule: **an identity convenience that is enabled by the absence of configuration is a
+production hole waiting for a deploy that forgets a variable.**
+
+**Sybil defence is arithmetic, not suspicion.** Six fresh accounts claiming one referrer end in named states — some
+attributed, the rest held for `velocity` — and *every one of them earns $0*, because a referral is worth nothing
+until a matched order clears the threshold and the accrual reads `fee_micro_observed` (the column reconciliation
+fills from the chain) rather than anything expected. A funding collision is refused as `duplicate_funding` and
+recorded as refused, not as a live attribution. Self-referral is refused `409 SELF_REFERRAL`, writes no attribution,
+records the ground in the audit trail, and disables the **programme's** builder code with the account named in the
+note — the kit's revocation ground, as a mechanism rather than a ticket. One operational gap is OPEN: nothing in the
+product re-enables a manual disable, and a second self-referral records `builder_code_revoked: false` while the code
+stays disabled.
+
+**What a probe cannot prove here, stated as limits.** No docker, so image contents are read as text and no built
+image has been probed; no Playwright, so the browser specs are CI-only; the provider-bound half of break-glass is
+unmeasured because Turnkey's revoke/rewrap rate is unknown (the local half: 0.06 s for 500 keys, six drills 0.03–0.2 s
+each); the 500-copier cascade is bounded arithmetically rather than end to end; and neither Stripe nor Telegram-Stars
+fulfilment exists yet, so payment-webhook forgery has no target — recorded with the exact signature, timestamp and
+replay requirements each must meet before it ships.
+
+**The standing consequence, unchanged and now load-bearing.** Per `docs/AGENTS-BUILD.md`, **no real funds until P13
+and P14 are green**, and P14's gate says NO-GO on two owner actions: GitHub 2FA is off on the account whose token
+holds `admin:org` and `delete_repo` (F13), and the Supabase project allows `0.0.0.0/0` (F14). Eight further OPEN items
+are measurements, not decisions. P15 is deployment; nothing there may be read as a substitute for those two actions.
