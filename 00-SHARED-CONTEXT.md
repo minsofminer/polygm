@@ -1386,3 +1386,131 @@ replay requirements each must meet before it ships.
 and P14 are green**, and P14's gate says NO-GO on two owner actions: GitHub 2FA is off on the account whose token
 holds `admin:org` and `delete_repo` (F13), and the Supabase project allows `0.0.0.0/0` (F14). Eight further OPEN items
 are measurements, not decisions. P15 is deployment; nothing there may be read as a substitute for those two actions.
+
+---
+
+## 30. P15, the operational half: a gate that kept finding bugs in itself, and an environment that reset twice (added 2026-09-23, nothing above deleted)
+
+P15 is deployment, observability, alerting, runbooks, DR, cost and a readiness review. The phase's own quality gate
+is a scenario rather than a checklist: **it is 2am, you get one page, and from a phone in under five minutes you can
+say whether the system is healthy, whether any user's money is inconsistent, and whether you should stop trading.**
+Everything built here exists to make those three answers cheap, and the most useful thing this session did was watch
+each gate fail for a real reason before it passed.
+
+**The build environment reset twice mid-phase, and the second reset is worth recording.** The first took the
+installed packages and `/tmp`; the second left the working tree intact and rolled `.git` back two commits, so
+`git status` showed sixty files that "looked uncommitted" while the commits were on GitHub all along. The lesson is
+already written into `tools/repo-recover.sh`, which exists because this has happened six times: **the remote is the
+truth, the local reflog is not.** Recovery is `git ls-remote` first, a `backup-pre-restore-N` branch, and
+`reset --mixed` — never `--hard`, because `--hard` discards the very work-in-progress the script exists to protect.
+Everything the phase had written survived; what was lost was only what had not yet been written to disk.
+
+**Three gates failed because the gates themselves had rotted, and every fix was a real product improvement.**
+
+* `make check` first failed at the **mutation harness**, whose baseline gate could not pass: `make_copy` created the
+  scratch tree with `git init`, which gives it an *unborn HEAD*, and three checks need real history (the secret-scan
+  exemption liveness, the tracked-file scan, and the new deploy-ledger test that requires each entry to name a
+  commit that exists). The fix is to clone the repository — `--local` first, falling back to `--shared` because
+  hardlinks cannot cross the filesystem boundary into the scratch tmpfs — and then lay the working tree over it. The
+  deeper lesson: **a harness that copies a repository must copy what the checks ask the repository about.**
+* The security scan's exemption liveness check was right and its search was wrong. `git log -S` was finding the
+  Telegram fixture token in the allowlist file's own *description* of the token, one commit after the entry was
+  written — so the entry was permanently "live" and a dead exemption could hide the next real key. The search now
+  excludes the allowlist itself, and the entry legitimately matches its own source commit.
+* The **wallet-test TOTP flake** was a fixture bug with a precise signature: the arming code was computed from
+  `setUp`'s frozen clock while the server windows the code at request time, so a 30-second boundary between them
+  turned a correct code into `cur−2` and the enrolment assert saw `403 TOTP_INVALID`. The fix computes the code from
+  the live clock microseconds before the POST, tries the previous window then the current one, and re-enrols (fresh
+  secret, fresh window) up to three times before asserting. Verified: 51/51 wallet tests three times, 1410 tests in
+  the full suite three times, and the gate's suite step green.
+
+**The deploy audit had two fail-open paths, and the tests for them are the point.** `begin` in a repository whose
+HEAD is unborn would have written an entry naming no revision — a ledger that looks complete and names nothing to
+roll back to — so it now refuses with exit 2 and writes nothing. `verify` could return PASS while checking nothing,
+because with no resolvable commits every per-entry commit check passes vacuously; it now fails closed and says so.
+Both refusals are exercised against scratch checkouts, with a control test proving they stand down when history
+exists. `PGM_DEPLOY_REPO` exists for exactly that: a drill can point the tool at a scratch checkout, which is how a
+refusal becomes provable instead of asserted.
+
+**The alarm registry is one file, and the gate reads it in both directions.** `ops/alerts.yaml` holds 25 rules with
+severity, owner, route, threshold, a stated `why`, an expected pages-per-week number, and a runbook path;
+`tools/p15-alerts.py --check` fails if a runbook is missing, if a runbook claims an alarm the registry does not
+define, if an owner or route is unknown, if a SEV1/SEV2 rule is routed anywhere but the on-call channel, or if the
+rules' own page estimates sum to 3.00/week or more. That last check caught this build: the estimates summed to 3.25,
+over the kit's limit, and the numbers were brought down to 2.75 *with the rule visible in the diff* rather than the
+limit being quietly raised. Two bugs the drill then found were both places where the engine was lying:
+
+* **the notification rendered `<object object at 0x…>` for every value** — the placeholder substitution resolved
+  against the rule's own detail dict instead of the payload, and `json.dumps` of a missing-value sentinel with
+  `default=str` produced the repr of a Python object. A page that reads like that is worse than a page that says
+  nothing, because it looks like it worked. Summaries now render against the payload with the rule's detail merged
+  in, an unresolved placeholder is `?`, and `{path|age}` / `{path|usd}` render durations and micro-dollars;
+* **a list rule that filters on one field and tests another could never fire** — filtering `freshness.feeds[*].silent`
+  by `transport: ws` cannot work on the projected booleans, because the filter needs the items. The engine now
+  resolves the item path, filters, and then projects the field; an empty selection is an error rather than a pass,
+  which is how the all-websockets-dead rule went from "unknown forever" to firing.
+
+**Every page-class alarm was then fired on purpose, and the evidence is the notification text.** `tools/p15-alert-drill.py`
+seeds the condition each rule watches into a copy of the seeded database, reads `/v1/admin/metrics` through the app,
+evaluates the registry, and **fails if the intended rule does not fire** — a drill that cannot fail is a
+demonstration, not a test. Two further bugs came out of that: the drill seeded its baseline with one clock for the
+whole run, so by the tenth scenario the "healthy" feeds were five seconds old and every scenario reported a
+lagging-feed alarm (the clock is now read per scenario); and the seeded sample's stuck deposit fired in every
+scenario until the drill learned to reset its own baseline. Ten SEV1 behaviours now fire deliberately and each
+firing is recorded in `docs/verification/p15-alerts-fired.jsonl` with the rendered notification — and with the
+environment stated in the evidence ("seeded locally"), because **delivery to a phone needs the bot token and is an
+owner step.** The five rules this drill cannot fire are listed with the reason and are covered elsewhere.
+
+**The four observability pillars gained the blocks the kit asks for and the endpoint did not have.** P15 D5 added
+`executor` (a heartbeat table, one row, UPSERTed at the top of every tick — written *first* so a tick that hangs
+goes stale rather than reporting alive), `security` (three named rows: export requests, suspensions, revocation
+jobs — never a "suspiciousness score"), `builderCode` (our code's state as the venue told us), in-flight money
+(`stuckDeposits`, `withdrawalsInFlight`), delivery counts, and per-feed `transport`/`lagging`/`thresholdMs`/`resyncs`
+where `resyncs: null` means "not reported" and never "zero". The metrics endpoint still refuses to invent anything:
+every block names its `source`.
+
+**The runbooks are checked as procedures, and the checker caught real command bugs.** Eighteen pages (the kit's
+fourteen plus four the alert registry needed somewhere to point), each with symptoms, diagnosis with exact
+commands, remediation, verification and escalation; each front matter carries owner, severity, alarms and a drill
+date. `tools/p15-runbooks-check.py` runs every tool the pages invoke with its own `--help` and compares flags — which
+found three genuinely wrong commands, including a `--base/--head` invocation of the money-path classifier whose real
+flags are `--since/--explain` — and found that `python3 -m executor.main` does not work from the repo root at all;
+the pages now say `python3 -m services.executor.main`. Six planted breakages (removed section, misspelled path,
+invented flag, stale drill date, bogus alarm id, missing front matter) are all caught, because a checker that cannot
+fail is a rubber stamp.
+
+**DR got a tested restore with a measured result, and the drill protects the two things a restore quietly breaks.**
+`tools/p15-restore-drill.py` snapshots (size, SHA-256, per-table row counts, and the *money checksums* — count plus
+integer micro-sum for all seven money columns), rebuilds the schema **through the product's own migration runner**,
+copies every row back, and then verifies: counts match, money sums match, no foreign-key violations, and the
+append-only triggers still *fire*. The first clean run: 123 tables, 3,261 rows, money matched, 58 triggers present,
+guard confirmed live, 128 ms total. Two bugs fixed on the way: `schema_migrations` is now rebuilt rather than copied
+(copying it both collided and would have hidden whether the migrations can rebuild the schema), and the guard probe
+inserts its own row when the restored database is empty, because "nothing to check" is a much weaker claim than the
+drill should be making. The production transport (`pg_dump | age | rclone`, restored from R2) stays marked
+`[UNVERIFIED]` in `docs/P15-dr.md` — and the drill prints that sentence in its own transcript, so the gap travels
+with the evidence.
+
+**Cost is arithmetic in one file, checked against two other documents.** `config/costs.json` projects
+**$119.38/month** at launch (range $109–129) against the kit's $300 envelope — 39.8% used — with every line's unit
+and where its price came from, `[UNVERIFIED]` markers on the two interpolated prices, a 50/80/100% gate that fires
+only on a *first* crossing (state in `var/cost-projection.json`), an `--actual` for what an operator reads off the
+console, and the cut order written down before it is needed: analytics retention, then long-tail tracking, never the
+executor or the money path. `tools/p15-cost.py --check` fails if the config, `docs/P15-deployment.md` and
+`infra/terraform/outputs.tf` disagree — which is how a stale `~$72` in outputs.tf was found and corrected.
+
+**The dashboards are three self-contained pages, and the alarms on them are the same rules.** One read of
+`/v1/admin/metrics` per page, inline CSS, no scripts, no external anything, ~9 KB — so the three-second budget is
+about the transfer, not about rendering. The status blocks are produced by *importing* the alarm engine, so a red
+block on the on-call page and a page on a phone cannot drift. The revenue page carries expected vs chain-measured
+builder fees and refuses to print an "alert → trade conversion" percentage it cannot honestly compute; the on-call
+page renders an unevaluable rule as loudly as a firing one.
+
+**What P15 leaves open, and it is honest about every one.** D9's checklist is 0/8 by artefact today: dashboards
+reviewed by the on-call, alarms fired *in staging*, runbooks drilled by a non-author, a timed rollback on real
+infrastructure, the synthetic probe running out-of-fleet, a 30-day rotation staffed, the kill switch thrown from a
+real phone, and a cost dashboard showing actual spend. `tools/p15-readiness.py --check` names the missing artefact
+for each and refuses to record a signature while any line is red. The pre-existing owner steps are unchanged:
+GitHub 2FA, the Supabase CIDR, the Turnkey provider rate, real image digests, provider credentials for
+`terraform apply`, the domain and Cloudflare delegation, `PGM_TELEGRAM_BOT_TOKEN`, the BotFather Mini App URL,
+real-phone acceptance — and the $50/72 h canary, which stays blocked while the P14 gate reads NO-GO.
