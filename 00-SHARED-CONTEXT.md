@@ -1701,7 +1701,9 @@ it. In both cases the plan was right and the test lied.
 clean; `npm run measure` inside budget — the disclosure costs **0.4 KB of JS on `/tma`** (196.5 KB of 200 KB) and
 0.1 KB of CSS everywhere, and the P08 bundle record was **re-measured** (`sources-sha256 487239bd499fde28`) so the
 gate is back to **16/16**; Python suite **1509 tests** via the repo's own runner with the P04 gate at **56/56**
-(1529 under pytest, whose extra 20 are `tests/test_p15_migrations.py`'s canaries). **What is not verified, and
+(1529 under pytest, whose extra 20 are `tests/test_p15_migrations.py`'s canaries). Re-run after the commit, because a web change is never only a web change: **P03 62/62** (token layer),
+**P09 7/7**, **P10 15/15**, **p12-selftest 4/4**, in one batch with `p16` 75/0 and its self-test 18/0, exit 0 —
+the bundle record had already been re-measured and the P08 gate restored to 16/16. **What is not verified, and
 cannot be from here:** the channel has no members, no alert has reached a real phone, no launch post has been
 published, and the five gates are dated in the future. P16 ships the plan and the machinery that keeps it honest;
 the numbers in it are the owner's to earn — which closes the kit's P01 → P16 sequence.
