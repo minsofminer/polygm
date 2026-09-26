@@ -1514,3 +1514,95 @@ for each and refuses to record a signature while any line is red. The pre-existi
 GitHub 2FA, the Supabase CIDR, the Turnkey provider rate, real image digests, provider credentials for
 `terraform apply`, the domain and Cloudflare delegation, `PGM_TELEGRAM_BOT_TOKEN`, the BotFather Mini App URL,
 real-phone acceptance — and the $50/72 h canary, which stays blocked while the P14 gate reads NO-GO.
+
+## 31. P15 D3–D9 (the pipeline, the pillars, the runbooks) and a payload budget that had been lying for five phases (added 2026-09-26, nothing above deleted)
+
+**What this section covers.** §30 recorded P15's operational half — the environment matrix, the infrastructure, the
+cost model, the alert engine, the dashboards, the runbooks — as far as the artefacts. This is the same phase carried
+to the point where it is *checked*: the pipeline that promotes code, the four observability pillars with their alarms,
+the runbooks with their drill records, DR with its restore drill, the cost gate, and the readiness checklist. The
+phase's own gate batch is the record; the finding that mattered most in it was not in P15 at all.
+
+**The payload budget was lying, and the check that was supposed to catch it was measuring the wrong thing.**
+Regenerating the web app's OpenAPI client made one source file newer than `docs/verification/P08-bundle.txt` — that
+is all it took. Measured against a real build instead of trusted because its timestamp looked recent, three routes
+were **over** the 200 KB budget the frontend shell had claimed 13 KB of headroom under for five phases: `/` 208.4 KB,
+`/markets` 200.1, `/tma` 226.7, against a record saying 186–189. The record was true when it was written; it was
+never re-measured, and `c8` compared the record's mtime against the newest source file — a proxy a `git checkout`
+defeats in *both* directions, which is how it produced one false pass (the payload, for five phases) and, the same
+week, one false fail (the tape record, written 60 ms before sources it still described accurately).
+
+**The fix has two halves and both are the point.** The payload: `app/page.tsx` imported the Mini App screen
+statically for a branch only the Mini App's own deployment takes, so the marketing page shipped the trading terminal
+to every visitor; inside the Mini App, the trade sheet and wallet views loaded before either was opened. Both are
+chunk boundaries now (`TmaSurface`, `next/dynamic` in `TmaScreen`) — `/` **184.2 KB**, `/markets` **192.6**,
+`/tma` **196.1** of first-party JS, with the trajectory 208.4/200.1/226.7/192.4 → 184.2/192.6/196.1/184.9. And
+`@tanstack/react-query` — 17 KB on every route, configured `refetchOnWindowFocus: false`, `retry: false`, per-site
+`staleTime`, i.e. told not to do the things a query library exists to do — is `web/src/api/data.ts` now: a Map+TTL
+cache with in-flight dedupe, `useResource`/`useAction`/`invalidate(prefix)`/`peek`/`resetCache`, and a discriminated
+`Resource<T>` so `isError` implies `error` instead of the call sites narrowing it. `data.test.ts` pins the semantics
+(7 tests); the web suite is 64 files / 569 tests. The measurement: the budget says what it budgets (**200 KB of
+first-party JS**), prints Telegram's platform bridge per route (18.0 KB on `/tma`) with the reason it is excluded
+rather than counting it or hiding it, and refuses an artefact that excludes an unnamed script. Context that makes
+196.1 legible: a *minimal* Next 16.3.5 + React 19 App Router app on this toolchain, no application code, measures
+**169.0 KB** — 84% of the budget is the framework. Own code is ≈15–16 KB per route.
+
+**The staleness contract is now content, not time.** Both measure scripts stamp `sources-sha256` over exactly the
+files they describe; `tools/p08-gate-check.py::bundle_source_hash` and `tools/p10-gate-check.py::perf_source_hash`
+recompute it and fail naming both digests. Verified both ways: planted drift fails (`the measurement describes
+different sources (it says 2fb35182a70f1664, the tree hashes to …)`), a re-checkout does not. One trap documented
+in the tooling: the Node scripts hash web-relative paths (`src/…`) and Python hashes repo-relative ones
+(`web/src/…`) — the first run after the rewrite reported drift that was a path-prefix spelling bug, not a real
+change, and `rel.removeprefix("web/")` is load-bearing. Editing a measure script invalidates its own record
+(it hashes itself) → re-run the measure, which is correct: the numbers it produced came from code that no longer
+exists. Current records: `P08-bundle.txt` `sources-sha256: eb4702203410c1db` (`/` 184.2 · `/markets` 192.6 ·
+`/tma` 196.1 + bridge 18.0 · `/profile` 184.9; worst route 196.1 of 200; the digest moved from `2fb35182a70f1664`
+when the measure script itself changed, which is the contract doing its job), `P10-perf.txt`
+`sources-sha256: c78a1c90d6bcdd98` (1.500 ms/s of load at 200 fills/s against a 16.7 ms budget, worst release
+0.667 ms).
+
+**One line in a shell script that a fresh checkout could not survive.** `deploy/deploy.sh` and `deploy/rollback.sh`
+were tracked `100644` while the pipeline runs `deploy/deploy.sh …` over SSH and the runbooks say
+`deploy/rollback.sh --env prod …`. A deploy host checks the repo out from git, so **the one command that has to work
+at 2am would have answered "Permission denied"** — and nothing in the tree would have looked wrong. Both are
+committed `100755` now. The counter-example is kept in mind: the earlier `chmod +x tools/*.py` left 63 mode-only
+changes, so the rule is *deploy scripts 755, everything else 644*, not "make everything executable".
+
+**The suite's own worst failure mode was a lying message.** A gate run printed
+`suite: 1272 tests, exit 1, tail 'FAILED (errors=33)'`. The 1272 (of ~1460) was the real tell, but the tally line
+named nothing: all 33 errors were `sqlite3.OperationalError: database or disk is full` from `apply_schema`, because
+`/tmp` on this box is a 1 GB tmpfs and a previously killed run had left 336 MB of migrated test databases behind.
+`tests/conftest.py` now measures the filesystem before it starts and **refuses** with the number, the reason, and the
+way out (`PGM_TEST_TMPDIR`), `tools/p04-gate-check.py` prints the same line and names ENOSPC when the phrase appears,
+and `tests/test_suite_guard.py` (9 tests) tests the guard itself — including a rehearsal through `_tmp_root()`, the
+same entry point a real run takes, so the message a person actually sees is the one intended, plus a vacuity check
+that the thresholds stay in a sane order. Full suite runs in this workspace now point `PGM_TEST_TMPDIR` at the 19 GB
+root filesystem, where 360 MB of databases is not a crisis.
+
+**The environment reset three times during this phase** (pip deps, `web/node_modules`, `.git/config`, Terraform and
+`/tmp` all vanish; the repository under `/home/user` survives). Recovery is now routine and scripted:
+`tools/repo-recover.sh --apply` rebuilds the remote from `~/.secrets/tokens.env` and level-checks against
+`origin/main` (it found local `3921df6` already level), then `pip install -r requirements.txt -r requirements-dev.txt`,
+`npm ci`, re-fetch Terraform 1.9.8 to `/tmp/tfbin`, and `chmod +x deploy/*.sh`. The hash-based records are what make
+this bearable: a reset touches every file's mtime, which under the old contract invalidated accurate measurements.
+
+**The full gate batch, re-run to the end for the first time since P09.** Two logs, both `EXIT=0`:
+`p01` **62/62**, `p02` **69/69 values re-derived**, `p03` **62/62 with 0 skipped and 0 without an evidence line**
+(its mutation harness re-ran the baseline green), `p04` **56/56** with the suite at **1469 tests, exit 0**,
+`openapi` **685/0**, `p05` **14/14**, `p06` **31/31** (241,877 ms), `p07` **32/32** including the 30-mutant run
+(225,289 ms), `seed-sql-check` clean; then `p08` **16/16** (75,121 ms), `p09` **7/7** (71,615 ms), `p10` **15/15**
+(5,228 ms), `p12` + `p12-selftest` **4 planted / 4 caught**, `p13-read`, `infra-check` incl. the live environment
+diff **18/18**, `p15-migrations`, `p15-pipeline` **81/0** + self-test **8 cases / 0 missed**, `p15-alerts`,
+`p15-runbooks` **6 planted / 0 missed**, `p15-cost`, `p15-dashboards` **3 pages / 2 firing / `--check` green**.
+Every `FAIL` string in the batch log is a harness reporting a **planted** breakage it caught (P03's mutants) or a
+canary asserting that a recorded failure is not counted as a pass — there is no failed check in either log, which is
+what `EXIT=0` twice is for. Two things this run settled that no earlier partial run had: P10's fifteen checks pass with the
+content-hash staleness contract (the c11 false failure that stopped the previous batch was the mtime artefact, not
+the tape), and P08's sixteen pass against a freshly measured bundle
+(`sources-sha256: eb4702203410c1db` — the digest moved when the measure script itself was edited, which is the
+contract working as intended).
+
+**The suite, standalone** (`python3 -W ignore::ResourceWarning -m unittest discover -s tests -p "test_*.py"`):
+`Ran 1469 tests in 179.407s — OK`, run with `PGM_TEST_TMPDIR=/home/user/.local/tmp` so the ~360 MB of migrated
+databases land on the 19 GB root filesystem instead of the 1 GB tmpfs that caused the original failure. The guard
+itself is covered: `tests/test_suite_guard.py` 9 tests, including the rehearsal through `_tmp_root()`.
