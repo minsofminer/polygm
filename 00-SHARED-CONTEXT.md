@@ -1588,7 +1588,7 @@ this bearable: a reset touches every file's mtime, which under the old contract 
 
 **The full gate batch, re-run to the end for the first time since P09.** Two logs, both `EXIT=0`:
 `p01` **62/62**, `p02` **69/69 values re-derived**, `p03` **62/62 with 0 skipped and 0 without an evidence line**
-(its mutation harness re-ran the baseline green), `p04` **56/56** with the suite at **1469 tests, exit 0**,
+(its mutation harness re-ran the baseline green), `p04` **56/56** with the suite at **1489 tests, exit 0**,
 `openapi` **685/0**, `p05` **14/14**, `p06` **31/31** (241,877 ms), `p07` **32/32** including the 30-mutant run
 (225,289 ms), `seed-sql-check` clean; then `p08` **16/16** (75,121 ms), `p09` **7/7** (71,615 ms), `p10` **15/15**
 (5,228 ms), `p12` + `p12-selftest` **4 planted / 4 caught**, `p13-read`, `infra-check` incl. the live environment
@@ -1603,6 +1603,29 @@ the tape), and P08's sixteen pass against a freshly measured bundle
 contract working as intended).
 
 **The suite, standalone** (`python3 -W ignore::ResourceWarning -m unittest discover -s tests -p "test_*.py"`):
-`Ran 1469 tests in 179.407s — OK`, run with `PGM_TEST_TMPDIR=/home/user/.local/tmp` so the ~360 MB of migrated
+`Ran 1489 tests in 197.215s — OK`, run with `PGM_TEST_TMPDIR=/home/user/.local/tmp` so the ~360 MB of migrated
 databases land on the 19 GB root filesystem instead of the 1 GB tmpfs that caused the original failure. The guard
 itself is covered: `tests/test_suite_guard.py` 9 tests, including the rehearsal through `_tmp_root()`.
+
+**Addendum to §31 (same day): the quality gate is now a command.** P15's gate is not a checklist, it is a sentence —
+one page, from a phone, five minutes, three answers — so it is demonstrated rather than described. `make p15-2am`
+(recorded in `docs/verification/P15-2am-drill.txt`) writes one `orphan` — an order at the venue we cannot map to a
+user, ten minutes old — into a scratch copy of the seeded database, leaving everything else healthy so the world has
+exactly one problem in it, then reads `/v1/admin/metrics` through the app, evaluates `ops/alerts.yaml` with the same
+engine the dashboards import, opens the runbook *that notification links to*, renders the on-call page from the same
+payload, and times itself: **0.9 s of the 300 s budget**, page **8.2 KB**, 1 alarm firing of 25 registered. The
+eight checks (page arrives as a `SEV1`/`page_now`; the page carries its summary, reason and owner; the dashboard's
+money number equals the number that fired the alarm; the kill-switch state is on the page and the linked runbook has
+a remediation section; the link resolves to the registry's own runbook; the phone page is self-contained,
+viewport-carrying, under 64 KB and carries the three sections; the triage is inside five minutes; every firing alarm
+has an owner and an existing runbook) are each able to fail, and **ten planted failures** in `--self-test` prove it.
+
+Two of them were wrong on the first run, and both fixes are the kind of thing this project keeps finding: c3 read
+the dashboard's *markup* (`>1 <`) instead of its text and reported a failure against a page that does carry the
+number, and the canary for c3 then looked caught only because c3 was already failing on the unmutated input — a
+canary going red for the wrong reason proves nothing, so the self-test now refuses to plant a single case until the
+drill is green, and the c3 canary renders the page from a deliberately drifted payload instead of editing HTML. The
+record says in its own header that it proves obtainability *locally* and not delivery to a phone: that needs
+`PGM_TELEGRAM_BOT_TOKEN` and a device, and it stays an owner step. `tests/test_p15_2am.py` (20 tests) covers the
+checks hermetically — including the markup bug above and the green-baseline rule — so the drill's reasoning is
+guarded without needing a seeded database.
