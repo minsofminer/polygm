@@ -1629,3 +1629,79 @@ record says in its own header that it proves obtainability *locally* and not del
 `PGM_TELEGRAM_BOT_TOKEN` and a device, and it stays an owner step. `tests/test_p15_2am.py` (20 tests) covers the
 checks hermetically — including the markup bug above and the green-baseline rule — so the drill's reasoning is
 guarded without needing a seeded database.
+
+---
+
+## §32 — P16, the last phase: launch, distribution and growth (platform `2b34213`, 2026-09-26)
+
+**The phase's deliverable is not code, so the phase treats the plan as the artefact and the repository as its
+judge.** `config/gtm.json` is the plan — beachhead and rejects, two channels, the message budget, the funnel, nine
+metric definitions, five gates each with a decision attached, the fee ramp, the copy rules and the five answers the
+kit's gate asks for — and `tools/p16-gtm-check.py` recomputes every claim it makes: **75 checks, 0 failed**,
+recorded in `docs/verification/P16-gtm.txt`, with **18 planted failures caught, 0 missed** in
+`docs/verification/P16-gtm-selftest.txt`.
+
+**D1 — who the first 1,000 are.** One beachhead, defended: **the 5-minute crypto Up/Down trader who already lives
+in Telegram**, reachable **≈ 18,000** = 300,000 monthly venue wallets × 0.20 hourly crypto × 0.60 in Telegram ×
+0.50 reachable organically. Every input carries a range and a `[CTX]`/`[PROBE]`/`[ASSUMPTION]` tag, and the checker
+fails any external number without one. 2,000 members is **11% of that pool**, and the plan says so in its own text
+rather than burying it. The whale-follower, the sports trader (**kept as the named fallback**) and the analytics
+power user are rejected with reasons, and the mechanism is named so it cannot drift: the incumbents' advantage is
+distribution — $125M/week across ~114 builders, Gini 0.83, six builders holding 81% of lifetime volume — so the
+wedge is a **Telegram alert channel they are not using**, not founder visibility.
+
+**D2–D3 — two channels, and the budget that is the strategy.** Ranked by cost per activated user: the free alert
+channel ($0) and the public pages' organic search ($0) are chosen; six are refused with named failure modes,
+including paid ads on arithmetic ($120 per activated user against a $12/month subscription is a year of payback
+before churn). The channel posts **≤ 12/day, ≤ 4/hour, ≤ 2 of a kind/hour, ≥ 6 minutes apart, quiet 00–06 local** —
+and the checker reads those caps out of `packages/polygm_core/telegrambot/channel.py`, so the plan and the engine
+that enforces it cannot drift apart. Free is genuinely good: the four event kinds, and **never paywalled** — the
+exit, the withdrawal path, the kill switch, the loss numbers on your own positions.
+
+**D4–D5 — activation and retention.** Activation is a **funded wallet plus one matched order within 7 days**, and
+the funnel multiplies out to **1.25%** of channel members (0.06 × 0.95 × 0.97 × 0.35 × 0.70 × 0.92 — about 25
+activated users from a 2,000-member channel in month one), with an intervention named at every step a person can
+leave from. Day 1/3/7 re-engagement is about the market, never about the user, and the config lists what is never
+sent. Retention is alerts, watchlists, self-ranking and automation; the losing-streak rules put the P&L, the
+drawdown, `/stop` and the kill switch on one screen and pause rules with the reason stated; **churn** is 30 days
+with no position, no live alert, no live rule and no session.
+
+**D6 — the ramp, in code.** `packages/polygm_core/revenue/schedule.py` loads the plan and refuses an illegal one:
+**0 bps at launch** → **10 bps at day 90** only if D7 retention ≥ 0.15 and ≥ 30 users traded twice → **25 bps at
+day 180** only against the month-6 gate — inside the venue's own mechanics (**7 days** between changes, **3 days**
+notice, **one pending** change). Increases require retention; **cuts are exempt by design** and still obey the
+venue's clock. Never a token; **builder fees stay under 60% of revenue** because the privilege is revocable at the
+venue's discretion. Pro is $12/month and the builder programme's grant pool ($2.5M, $100–$75k) is applied for after
+week 8 with the scorecard's real numbers attached.
+
+**D7–D9 — the gates, the words, the trust surface.** Five gates (`wk4` 2,000 members OR 500 MAU; `wk8` 30
+twice-traders + $50k/week; `wk12` $150k/month + 150 paying; `mo6` $500k/month + $15k MRR; `mo12` $1.5M/month +
+$40k MRR), each with an `if_missed` action; the **month-12 miss is written as a procedure** — what users are told,
+what keeps running read-only, how money gets out — because a plan with no exit is not a plan. The words are three
+documents: `docs/P16-gtm.md`, `docs/P16-launch-assets.md` (landing hero, `/start`, the pinned post, X, Telegram,
+Product Hunt and Hacker News with an honest audience assessment that predicts 0–2 activated users, the cross-promo
+DM, ten support macros) and `docs/P16-community.md` (useful before promotional, transparent loss handling, a status
+page reading the same sources the alert engine pages on, impersonation defence in five checkable points).
+
+**The disclosure, on every surface.** `web/src/legal/disclaimer.tsx` holds three sentences once — **not affiliated
+with Polymarket**; **odds are a market, not a forecast**; this is a market that resolves to zero and you can lose
+everything you deposit — rendered by the landing page, the Mini App and every public page footer, with
+`disclaimer.test.tsx` (11 tests) reading the required phrases out of `config/gtm.json` instead of restating them and
+asserting that the three surfaces *render* it rather than merely import it.
+
+**What the phase's own machinery caught, which is the part worth carrying forward.** The plan's first draft quoted
+the phrase it forbids (the checker's banned list is absolute, including in a "never say this" sentence); the
+disclaimer's first stylesheet used **px fallbacks inside `var()`**, and the P08 design-token check caught five
+literals, so the literals went and the check stayed; and two self-test canaries found bugs **in the checker itself**
+— `c5` read the disclaimer file *with its comments*, so a deleted sentence could still have passed on a docstring,
+and `c4` validated `config/gtm.json` from disk rather than the config it was handed, so a mutation was invisible to
+it. In both cases the plan was right and the test lied.
+
+**Verified at close.** `make p16` **75/0**; `--self-test` **18/0**; web `npm test` **65 files / 580 tests**, build
+clean; `npm run measure` inside budget — the disclosure costs **0.4 KB of JS on `/tma`** (196.5 KB of 200 KB) and
+0.1 KB of CSS everywhere, and the P08 bundle record was **re-measured** (`sources-sha256 487239bd499fde28`) so the
+gate is back to **16/16**; Python suite **1509 tests** via the repo's own runner with the P04 gate at **56/56**
+(1529 under pytest, whose extra 20 are `tests/test_p15_migrations.py`'s canaries). **What is not verified, and
+cannot be from here:** the channel has no members, no alert has reached a real phone, no launch post has been
+published, and the five gates are dated in the future. P16 ships the plan and the machinery that keeps it honest;
+the numbers in it are the owner's to earn — which closes the kit's P01 → P16 sequence.
